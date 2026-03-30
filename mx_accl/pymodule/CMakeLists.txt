@@ -62,7 +62,6 @@ add_subdirectory(pybind11)  # Clone from https://github.com/pybind/pybind11
 # This will automatically name the output module "mxapi.<python_abi_tag>.so"
 pybind11_add_module(mxapi bindings.cpp)
 
-
 # find the path to the site-packages/numpy/core/include/ directory for the currently
 # active Python environment, and add that to the target_include_directories
 execute_process(
@@ -73,8 +72,14 @@ execute_process(
 
 # Include directories
 target_include_directories(mxapi PRIVATE
-                           ${CMAKE_SOURCE_DIR}
                            ${PYTHON_NUMPY_INCLUDE_DIR}
-                           /usr/include/)
+                           ${CMAKE_CURRENT_SOURCE_DIR}/../../extern/spdlog
+                           ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 
 target_link_libraries(mxapi PRIVATE mx_accl)
+
+# Set RPATH for the build tree so the executable can find 
+# the 'mx_accl' shared library without manual LD_LIBRARY_PATH exports.
+set_target_properties(mxapi PROPERTIES
+    BUILD_RPATH "${CMAKE_CURRENT_SOURCE_DIR}/../../build/mx_accl"
+)

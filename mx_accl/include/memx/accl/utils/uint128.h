@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -156,14 +156,15 @@ struct uint128_t {
         }
         return r;
     }
-    template<typename T,
-            typename = typename std::enable_if<
-                std::is_integral<T>::value &&
-                std::is_unsigned<T>::value &&
-            (sizeof(T) <= sizeof(uint64_t))
-        >::type
-    >
-    constexpr operator T() const noexcept {
+    template < typename T,
+               typename = typename std::enable_if <
+                   std::is_integral<T>::value &&
+                   std::is_unsigned<T>::value &&
+                   (sizeof(T) <= sizeof(uint64_t))
+                    >::type
+                   >
+               constexpr operator T() const noexcept
+    {
         return static_cast<T>(lo);
     }
 };

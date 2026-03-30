@@ -1,6 +1,26 @@
 /***************************************************************************//**
  * @note
- * Copyright (C) 2019-2024 MemryX Limited. All rights reserved.
+ * Copyright (C) 2019-2026 MemryX
+ *
+ * SPDX-License-Identifier: MIT
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  *
  ******************************************************************************/
 #ifndef MEMX_H_
@@ -24,7 +44,7 @@ extern "C" {
  *  y: top level memx api changed,
  *  z: minor bug fix.
  */
-#define MEMX_LIBRARY_VERSION "2.11.2"
+#define MEMX_LIBRARY_VERSION "2.12.1"
 
 /***************************************************************************//**
  * common
@@ -73,39 +93,42 @@ typedef enum _memx_status {
 #endif /* MEMX_STATUS_H_ */
 
 typedef enum _memx_get_feature_opcode {
-  OPCODE_GET_MANUFACTURERID         = 0,
-  OPCODE_GET_FW_COMMIT              = 1,
-  OPCODE_GET_DATE_CODE              = 2,
-  OPCODE_GET_COLD_WARM_REBOOT_COUNT = 3,
-  OPCODE_GET_WARM_REBOOT_COUNT      = 4,
-  OPCODE_GET_KDRIVER_VERSION        = 5,
-  OPCODE_GET_TEMPERATURE            = 6,
-  OPCODE_GET_THERMAL_STATE          = 7,
-  OPCODE_GET_THERMAL_THRESHOLD      = 8,
-  OPCODE_GET_FREQUENCY              = 9,
-  OPCODE_GET_VOLTAGE                = 10,
-  OPCODE_GET_THROUGHPUT             = 11,
-  OPCODE_GET_POWER                  = 12,
-  OPCODE_GET_POWERMANAGEMENT        = 13,
-  OPCODE_GET_POWER_ALERT            = 14,
-  OPCODE_GET_MODULE_INFORMATION     = 15,
-  OPCODE_GET_INTERFACE_INFO         = 16,
-  OPCODE_GET_IFMAP_CONTROL          = 17,
-  OPCODE_GET_HW_INFO                = 18,
-  OPCODE_GET_QSPI_RESET_RELEASE     = 19,
-  OPCODE_GET_MPU_UTILIZATION        = 20,
+  OPCODE_GET_MANUFACTURERID          = 0,
+  OPCODE_GET_FW_COMMIT               = 1,
+  OPCODE_GET_DATE_CODE               = 2,
+  OPCODE_GET_COLD_WARM_REBOOT_COUNT  = 3,
+  OPCODE_GET_WARM_REBOOT_COUNT       = 4,
+  OPCODE_GET_KDRIVER_VERSION         = 5,
+  OPCODE_GET_TEMPERATURE             = 6,
+  OPCODE_GET_THERMAL_STATE           = 7,
+  OPCODE_GET_THERMAL_THRESHOLD       = 8,
+  OPCODE_GET_FREQUENCY               = 9,
+  OPCODE_GET_VOLTAGE                 = 10,
+  OPCODE_GET_THROUGHPUT              = 11,
+  OPCODE_GET_POWER                   = 12,
+  OPCODE_GET_POWERMANAGEMENT         = 13,
+  OPCODE_GET_POWER_ALERT             = 14,
+  OPCODE_GET_MODULE_INFORMATION      = 15,
+  OPCODE_GET_INTERFACE_INFO          = 16,
+  OPCODE_GET_IFMAP_CONTROL           = 17,
+  OPCODE_GET_HW_INFO                 = 18,
+  OPCODE_GET_QSPI_RESET_RELEASE      = 19,
+  OPCODE_GET_MPU_UTILIZATION         = 20,
+  OPCODE_GET_FREQUENCY_EFFECTIVE     = 21,
+  OPCDOE_GET_DEVICE_DMA_TRIGGER_TYPE = 22,
   OPCODE_GET_FEATURE_MAX
 } memx_get_feature_opcode;
 
 typedef enum _memx_set_feature_opcode {
-  OPCODE_SET_THERMAL_THRESHOLD      = 0,
-  OPCODE_SET_FREQUENCY              = 1,
-  OPCODE_SET_VOLTAGE                = 2,
-  OPCODE_SET_POWERMANAGEMENT        = 3,
-  OPCODE_SET_POWER_THRESHOLD        = 4,
-  OPCODE_SET_POWER_ALERT_FREQUENCY  = 5,
-  OPCODE_SET_IFMAP_CONTROL          = 6,
-  OPCODE_SET_QSPI_RESET_RELEASE     = 7,
+  OPCODE_SET_THERMAL_THRESHOLD       = 0,
+  OPCODE_SET_FREQUENCY               = 1,
+  OPCODE_SET_VOLTAGE                 = 2,
+  OPCODE_SET_POWERMANAGEMENT         = 3,
+  OPCODE_SET_POWER_THRESHOLD         = 4,
+  OPCODE_SET_POWER_ALERT_FREQUENCY   = 5,
+  OPCODE_SET_IFMAP_CONTROL           = 6,
+  OPCODE_SET_QSPI_RESET_RELEASE      = 7,
+  OPCDOE_SET_DEVICE_DMA_TRIGGER_TYPE = 8,
   OPCODE_SET_FEATURE_MAX
 } memx_set_feature_opcode;
 
@@ -144,6 +167,12 @@ typedef enum {
   MXMX_CHIP_VERSION_A1 = 5,
   MXMX_CHIP_VERSION_MAX
 } MXMX_CHIP_VERSION;
+
+typedef enum {
+  MEMX_CHIP_INPUT_DMA_TRIGGER_TYPE_CHIP = 0x0,
+  MEMX_CHIP_INPUT_DMA_TRIGGER_TYPE_HOST = 0x1,
+  MEMX_CHIP_INPUT_DMA_TRIGGER_TYPE_MAX
+} MEMX_CHIP_INPUT_DMA_TRIGGER_TYPE_t;
 
 #define GET_BOOT_MODE(module_info) ((module_info >> 32) & 0x3)
 #define GET_CHIP_VERSION(module_info) (module_info & 0xF)

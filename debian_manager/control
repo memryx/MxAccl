@@ -1,8 +1,8 @@
 Source: mxa-manager
 Maintainer: MemryX <no-reply@memryx.com>
-Build-Depends: debhelper (>= 13.3), memx-drivers (>= 2.1.0), memx-drivers (<< 2.2.0), memx-accl (>= 2.1.0), memx-accl (<< 2.2.0), systemd-sysusers | dh-sysuser
+Build-Depends: debhelper (>= 13.3), memx-drivers (>= 2.2.0), memx-drivers (<< 2.3.0), memx-accl (>= 2.2.0), memx-accl (<< 2.3.0), systemd-sysusers | dh-sysuser
 
 Package: mxa-manager
 Architecture: amd64 arm64 riscv64
-Depends: memx-accl (>= 2.1.0), memx-accl (<< 2.2.0), ${shlibs:Depends}, ${misc:Depends}
+Depends: memx-accl (>= 2.2.0), memx-accl (<< 2.3.0), ${shlibs:Depends}, ${misc:Depends}
 Description: Hardware management daemon for MemryX MXAs

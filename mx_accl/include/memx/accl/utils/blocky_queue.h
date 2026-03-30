@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -59,7 +59,7 @@ class BlockyQueue
         // pop
         T ret = std::move(q.front());
         q.pop_front();
-        
+
         // clear lock
         lock.unlock();
 
@@ -82,7 +82,7 @@ class BlockyQueue
 
         // clear lock
         lock.unlock();
-        
+
         // wake up anyone waiting on full
         s_not_full.notify_one();
     }
@@ -145,6 +145,19 @@ class BlockyQueue
         return q.size();
     }
 
+    bool empty() const
+    {
+        std::lock_guard<std::mutex> lock(m);
+        return q.empty();
+    }
+
+    void notify() const
+    {
+        std::unique_lock<std::mutex> lock(m);
+        s_not_empty.notify_all(); // wake up anyone waiting on the pop CV
+        lock.unlock();
+    }
+
   protected:
     std::deque<T> q;
     mutable std::mutex m;
@@ -162,7 +175,7 @@ class BQExtFlag
 {
 
   public:
-    explicit BQExtFlag(unsigned int capacity, SharedLockedVar<bool> *ext_flag_, bool val_to_wait_for_ = true)
+    explicit BQExtFlag(unsigned int capacity, SharedLockedVar<bool>* ext_flag_, bool val_to_wait_for_ = true)
     {
         ext_flag = ext_flag_;
         val_to_wait_for = val_to_wait_for_;
@@ -259,7 +272,7 @@ class BQExtFlag
         }
         ret = std::move(q.front());
         q.pop_front();
-        
+
         lock.unlock();
 
         // wake up anyone waiting on full
@@ -325,7 +338,7 @@ class BQExtFlag
 
 
     bool val_to_wait_for; // value to wait for in the external flag
-    SharedLockedVar<bool> *ext_flag; // external wait flag, if set to true, pop will block until it is set to false
+    SharedLockedVar<bool>* ext_flag; // external wait flag, if set to true, pop will block until it is set to false
 };
 
 
@@ -335,7 +348,7 @@ class BQExtFlagX
 {
 
   public:
-    explicit BQExtFlagX(unsigned int capacity, LockedVar<bool> *ext_flag_, bool val_to_wait_for_ = true)
+    explicit BQExtFlagX(unsigned int capacity, LockedVar<bool>* ext_flag_, bool val_to_wait_for_ = true)
     {
         ext_flag = ext_flag_;
         val_to_wait_for = val_to_wait_for_;
@@ -498,7 +511,7 @@ class BQExtFlagX
 
 
     bool val_to_wait_for; // value to wait for in the external flag
-    LockedVar<bool> *ext_flag; // external wait flag, if set to true, pop will block until it is set to false
+    LockedVar<bool>* ext_flag; // external wait flag, if set to true, pop will block until it is set to false
 };
 
 }

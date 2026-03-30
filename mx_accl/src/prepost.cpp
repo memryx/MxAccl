@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -68,7 +68,7 @@ PrePost* createObject(std::string soFileName, std::string functionName, std::str
     }
 
     if(!handle) {
-        throw std::runtime_error("Failed to load shared object: " + std::string(soFileName) + ". Try to reinstall memx-accl");
+        throw std::runtime_error("Failed to load shared object: " + std::string(soFileName) + ". Try to `apt install memx-accl-plugins`");
     }
 
     // Get the function pointer for creating objects from the shared object

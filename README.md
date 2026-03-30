@@ -6,7 +6,7 @@
 
 
 <!-- Badges for quick project insights -->
-[![MemryX SDK](https://img.shields.io/badge/MemryX%20SDK-2.1-brightgreen)](https://developer.memryx.com)
+[![MemryX SDK](https://img.shields.io/badge/MemryX%20SDK-2.2-brightgreen)](https://developer.memryx.com)
 [![C++](https://img.shields.io/badge/C++-17-blue)](https://en.cppreference.com)
 
 
@@ -38,6 +38,7 @@ This repository contains the source code for the core `mx_accl` library and asso
 | Folder                               | Description                                                                                                                  |
 | -------------------------------------| ---------------------------------------------------------------------------------------------------------------------        |
 | `mx_accl`                            | Core MxAccl runtime library code
+| `mx_accl/pymodule`                   | Python bindings for the MxAccl library
 | `mxa_manager`                        | MXA-Manager daemon and config files
 | `tools`                              | Utilities like acclBench
 | `misc`                               | Copies of the binary `libmemx.so` library, used for building Yocto packages separately
@@ -71,6 +72,16 @@ git clone https://github.com/memryx/MxAccl.git
 ```bash
 mkdir build && cd build
 
+cmake ..
+make -j$(nproc)
+```
+
+### (Optional) Step 3: Build Python Bindings
+
+```bash
+# activate your Python venv with numpy, etc. installed
+cd ../mx_accl/pymodule
+mkdir build && cd build
 cmake ..
 make -j$(nproc)
 ```

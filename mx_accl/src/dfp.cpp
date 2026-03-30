@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <cassert>
 #include <iostream>
+#include "spdlog/spdlog.h"
 
 #include <memx/accl/dfp.h>
 #include <memx/accl/utils/mxpack.h>
@@ -125,7 +126,6 @@ DfpObject::DfpObject(uint8_t* b, size_t byte_size)
     is_from_file = false;
     dfp_byte_size = byte_size;
     if(__load_dfp_bytes(b) != 0) {
-        printf("Failed to load dfp from bytes\n");
         valid = false;
         if(iports != nullptr) {
             for(int i = 0; i < meta.num_inports; i++) {
@@ -151,6 +151,8 @@ DfpObject::DfpObject(uint8_t* b, size_t byte_size)
             delete [] oports;
             oports = nullptr;
         }
+        spdlog::error("[DfpObject] Failed to load DFP from bytes");
+        throw(std::runtime_error("Failed to load DFP from bytes"));
     }
     else {
         valid = true;
@@ -165,7 +167,6 @@ DfpObject::DfpObject(std::string f)
     oports = nullptr;
     is_from_file = true;
     if(__load_dfp_file(f.c_str()) != 0) {
-        printf("Failed to load dfp file %s\n", f.c_str());
         valid = false;
         meta.num_inports = 0;
         meta.num_outports = 0;
@@ -193,6 +194,8 @@ DfpObject::DfpObject(std::string f)
             delete [] oports;
             oports = nullptr;
         }
+        spdlog::error("[DfpObject] Failed to load DFP file: {}", f);
+        throw(std::runtime_error("Failed to load DFP file: " + f));
     }
     else {
         valid = true;
@@ -254,7 +257,7 @@ DfpObject::~DfpObject()
         dfpCacheEntry.pOuputConfigList = nullptr;
     }
 
-    if(is_from_file){
+    if(is_from_file) {
         if(src_dfp_bytes != nullptr) {
             delete [] src_dfp_bytes;
             src_dfp_bytes = nullptr;
@@ -827,7 +830,7 @@ int DfpObject::__load_dfp_bytes(uint8_t* b)
                                         std::cerr << "Unsupported dtype in raw_shape for key " << key_str << "\n";
                                         break;
                                 }
-                                
+
                                 port_cfg->raw_shape[key_int] = value;
                             }
 
@@ -880,6 +883,15 @@ int DfpObject::__load_dfp_bytes(uint8_t* b)
                                     port_cfg->shape_shift_info.folded_opshape.push_back(parse_int_list(shape_list));
                                 }
                             }
+
+                            // applying transforms to calculate & initialize permuted_indices @ input ports
+                            std::vector<uint32_t> model_shape;
+                            for(size_t i = 0; i < port_cfg->raw_shape.size(); ++i) {
+                                model_shape.push_back(port_cfg->raw_shape.at(i));
+                            }
+                            port_cfg->permuted_indices = port_cfg->compute_index_mapping(model_shape, port_cfg->shape_shift_info, true);
+
+
                         } // end of shape_shift_info parsing
                     } // end of v6.1 parsing
                 }
@@ -888,7 +900,7 @@ int DfpObject::__load_dfp_bytes(uint8_t* b)
                                          * port_cfg->dim_w
                                          * port_cfg->dim_z
                                          * port_cfg->dim_c );
-                
+
                 meta.num_used_inports += 1;
                 while(meta.model_inports.size() <= port_cfg->model_index) {
                     std::vector<uint8_t> vect;
@@ -1181,6 +1193,10 @@ int DfpObject::__load_dfp_bytes(uint8_t* b)
                                     port_cfg->shape_shift_info.folded_opshape.push_back(parse_int_list(shape_list));
                                 }
                             }
+                            // applying transforms to calculate & initialize permuted_indices @ output ports
+                            std::vector<uint32_t> mxa_shape = {port_cfg->dim_h, port_cfg->dim_w, port_cfg->dim_z, port_cfg->dim_c};
+                            port_cfg->permuted_indices = port_cfg->compute_index_mapping(mxa_shape, port_cfg->shape_shift_info, false);
+
                         } // end of shape_shift_info parsing
                     } // end of v6.1 parsing
                 }
@@ -1241,18 +1257,19 @@ int DfpObject::__load_dfp_bytes(uint8_t* b)
 
 
                 // set total size based on hpoc or not
-                if(port_cfg->hpoc_en){
+                if(port_cfg->hpoc_en) {
                     port_cfg->total_size = ( port_cfg->dim_h
                                              * port_cfg->dim_w
                                              * port_cfg->dim_z
                                              * port_cfg->hpoc_dim_c );
-                } else {
+                }
+                else {
                     port_cfg->total_size = ( port_cfg->dim_h
                                              * port_cfg->dim_w
                                              * port_cfg->dim_z
                                              * port_cfg->dim_c );
                 }
-            
+
                 meta.num_used_outports += 1;
                 while(meta.model_outports.size() <= port_cfg->model_index) {
                     std::vector<uint8_t> vect;
@@ -1350,6 +1367,7 @@ int DfpObject::__load_dfp_file(const char* f)
     fp = fopen(f, "rb");
 
     if(fp == nullptr) {
+        throw(std::runtime_error("Invalid file or unsupported DFP version"));
         return -1;
     }
 
@@ -1382,3 +1400,188 @@ void DfpObject::set_device_ids(const std::vector<int> &device_ids)
 {
     device_ids_to_use = device_ids;
 }
+
+
+// Input -->
+// shape: (on which transforms has to performed)
+// shape_shift_info as stored in the input/output portinfo
+// inport = true (if input port) else false
+// Output -->
+// returns indices after performing folded tranposes/reshpaes/(add&remove dims as required)
+std::vector<unsigned int> PortInfo::compute_index_mapping(std::vector<uint32_t> shape, const PortInfo::shape_shift_info_t &shape_shift_info, bool inport)
+{
+
+    // Internal helper: generate all indices for a given shape (Cartesian product)
+    // given shape = {2,3}, the fn will return all coordinate indices for a 2×3 array
+    // i.e { {0,0}, {0,1}, {0,2}, {1,0}, {1,1}, {1,2} }
+    auto generate_indices = [](const std::vector<int> &shape) {
+        std::vector<std::vector<int>> result;
+        std::vector<int> current(shape.size(), 0);
+
+        // Recursive lambda via self-passing
+        auto backtrack = [&](auto &&self, unsigned int depth) -> void {
+            if (depth == shape.size())
+            {
+                result.push_back(current);
+                return;
+            }
+            for (int i = 0; i < shape[depth]; ++i)
+            {
+                current[depth] = i;
+                self(self, depth + 1);  // Recursively call itself
+            }
+        };
+
+        backtrack(backtrack, 0);  // Initial call
+        return result;
+    };
+
+    // Internal helper: transpose shape and get flat indices mapping
+    auto transpose_general = [&](const std::vector<uint32_t> &shape, const std::vector<uint32_t> &permute) {
+        std::vector<int> transposed_shape(permute.size());
+        for (unsigned int i = 0; i < permute.size(); ++i) {
+            transposed_shape[i] = shape[permute[i]];
+        }
+
+        // Build reverse map from original axis to position in permute
+        std::vector<unsigned int> map_idx(shape.size());
+        for (unsigned int idx = 0; idx < permute.size(); ++idx) {
+            map_idx[permute[idx]] = idx;
+        }
+
+        // Compute strides for original shape
+        int ndim = shape.size();
+        std::vector<int> strides(ndim, 1);
+        for (int i = ndim - 2; i >= 0; --i) {
+            strides[i] = strides[i + 1] * shape[i + 1];
+        }
+
+        // Generate all index tuples in transposed space
+        std::vector<std::vector<int>> transposed_indices = generate_indices(transposed_shape);
+
+        // Map back to flat indices
+        std::vector<unsigned int> permuted_indices;
+        for (const auto &transposed_idx : transposed_indices) {
+            std::vector<unsigned int> original_idx(ndim);
+            for (int original_axis = 0; original_axis < ndim; ++original_axis) {
+                int transposed_axis = map_idx[original_axis];
+                original_idx[original_axis] = transposed_idx[transposed_axis];
+            }
+
+            int flat_index = 0;
+            for (int i = 0; i < ndim; ++i) {
+                flat_index += original_idx[i] * strides[i];
+            }
+
+            permuted_indices.push_back(flat_index);
+        }
+
+        return permuted_indices;
+    };
+
+    const std::vector <std::string> op_lst         = shape_shift_info.folded_optype;
+    const std::vector <std::vector<int>> op_shapes = shape_shift_info.folded_opshape;
+    bool first_transpose = true;
+
+    // Initialize indices (for cases when there are no transposes or reshapes)
+    // Compute total number of elements
+    unsigned int total_size = 1;
+    for (int dim : shape) {
+        total_size *= (unsigned int)dim;
+    }
+
+    //Generate linear indices: 0 .. total_size-1
+    std::vector<unsigned int> indices(total_size);
+    for (unsigned int i = 0; i < total_size; ++i) {
+        indices[i] = i;
+    }
+
+    // if it's an output port perform add and remove dims before folded ops
+    if(!inport) {
+
+        // then add and remove dims for shape should be handled here.
+        // perform add operations only.
+        std::vector<uint32_t> next_shape(shape.size());
+
+        for (unsigned int i = 0; i < shape_shift_info.add.size(); i++) {
+            // get the index from the shape_shift_info.add vector, and
+            // add a singleton dimention to the current_shape
+            int add_index = shape_shift_info.add[i];
+
+            // add a singleton dimension at the add_index]
+            next_shape.resize(shape.size() + 1);
+            for (int j = 0; j < (int)shape.size() + 1; j++) {
+                if (j < add_index) {
+                    next_shape[j] = shape[j];
+                }
+                else if (j == add_index) {
+                    next_shape[j] = 1; // singleton dimension
+                }
+                else {
+                    next_shape[j] = shape[j - 1];
+                }
+            }
+
+            // then set current_shape to next_shape and clear next_shape
+            shape = next_shape;
+            next_shape.clear();
+        }
+
+        // then do all sub operations ONLY
+        for (unsigned int i = 0; i < shape_shift_info.remove.size(); i++) {
+            // get the index from the shape_shift_info.remove vector, and
+            // remove the dimension at that index from the current_shape
+            int remove_index = shape_shift_info.remove[i] - i;
+
+            // remove the dimension at the remove_index
+            next_shape.resize(shape.size() - 1);
+            for (int j = 0; j < (int)shape.size(); j++) {
+                if (j < remove_index) {
+                    next_shape[j] = shape[j];
+                }
+                else if (j > remove_index) {
+                    next_shape[j - 1] = shape[j];
+                }
+            }
+
+            // then set current_shape to next_shape and clear next_shape
+            shape = next_shape;
+            next_shape.clear();
+
+        }
+    }
+
+    for (unsigned int idx = 0; idx < op_lst.size(); ++idx) {
+        const std::string &op = op_lst[idx];
+        std::vector<uint32_t> op_shape(op_shapes[idx].begin(), op_shapes[idx].end()); // because shape is of type uint32_t
+
+        if (op == "reshape") {
+            shape = op_shape;
+        }
+        else if (op == "transpose" && first_transpose) {
+            indices = transpose_general(shape, op_shape);
+            std::vector<uint32_t> new_shape;
+            for (unsigned int i = 0; i < op_shape.size(); ++i) {
+                new_shape.push_back(shape[op_shape[i]]);
+            }
+            shape = new_shape;
+            first_transpose = false;
+        }
+        else if (op == "transpose") {
+            std::vector<unsigned int> transpose_indices = transpose_general(shape, op_shape);
+            std::vector<unsigned int> new_indices(indices.size());
+            for (unsigned int i = 0; i < indices.size(); ++i) {
+                new_indices[i] = indices[transpose_indices[i]];
+            }
+            indices = new_indices;
+            std::vector<uint32_t> new_shape;
+            for (unsigned i = 0; i < op_shape.size(); ++i) {
+                new_shape.push_back(shape[op_shape[i]]);
+            }
+            shape = new_shape;
+        }
+    }
+
+    return indices;
+}
+

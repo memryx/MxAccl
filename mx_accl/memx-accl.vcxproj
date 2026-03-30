@@ -154,7 +154,6 @@ copy /Y "$(OutDir)memx-accl.lib" $(OutDir)..\..\..\samples\acclBench
     <ClCompile Include="src\prepost.cpp" />
     <ClCompile Include="src\utils\cpu_opts.cpp" />
     <ClCompile Include="src\utils\featureMap.cpp" />
-    <ClCompile Include="src\utils\general.cpp" />
     <ClCompile Include="src\utils\id_tracker.cpp" />
     <ClCompile Include="src\utils\mxpack.cpp" />
     <ClCompile Include="src\utils\mxTypes.cpp" />

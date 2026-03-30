@@ -45,9 +45,6 @@
     <ClCompile Include="src\utils\path.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="src\utils\general.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="src\client.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

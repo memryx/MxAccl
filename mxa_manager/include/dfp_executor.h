@@ -28,6 +28,7 @@
 #include "contexts.h"
 
 #include <memx/accl/messages.h>
+#include <memx/accl/utils/auto_clocker.h>
 #include <memx/accl/utils/locked_var.h>
 #include <memx/accl/utils/mxTypes.h>
 #include <memx/accl/utils/blocky_queue.h>
@@ -45,12 +46,25 @@ namespace Manager
 // these tasks get queued up by the Scheduler thread
 // into each Executor thread, which then runs them
 struct ExecutorTask {
-    ExecutorTask() : dfp_ctx(nullptr), allowed_device(-1), frame_limit(0), time_limit(0), freq_option(MX::Types::MxFrequencyOption::FREQ_USE_CONF) {}
+    ExecutorTask() : dfp_ctx(nullptr), allowed_device(-1), frame_limit(0), time_limit(0),
+        freq_option(MX::Types::MxFrequencyOption::FREQ_USE_CONF), autoclock_enabled(true),
+        autoclock_done(false), autoclock_check_fps_saturation(false), autoclock_sample_interval_ms(50),
+        autoclock_num_samples(6), power_limit_mw(11500) {}
+
+    // scheduling items
     DFPContext* dfp_ctx;
     int allowed_device;
     uint64_t frame_limit;
     uint32_t time_limit;
+
+    // autoclock options
     MX::Types::MxFrequencyOption freq_option;
+    bool autoclock_enabled;
+    LockedVar<bool> autoclock_done;
+    bool autoclock_check_fps_saturation;
+    unsigned int autoclock_sample_interval_ms;
+    unsigned int autoclock_num_samples;
+    unsigned int power_limit_mw;
 };
 
 
@@ -86,7 +100,7 @@ class DFPExecutor
 
   public:
     DFPExecutor(uint8_t device_id_, std::vector<device_info_t>* devinfos_,
-            const BlockyQueue<ExecutorTask*> *my_exec_queue_, unsigned int hw_monitor_interval_ms = 500);
+                const BlockyQueue<ExecutorTask*>* my_exec_queue_, unsigned int hw_monitor_interval_ms = 500);
     ~DFPExecutor();
 
     // so that ModelThreadPair can touch DFPExecutor's privates
@@ -94,8 +108,10 @@ class DFPExecutor
 
     bool run_dfp(ExecutorTask* task);
 
+    MX::Types::MxFrequencyOption run_autoclock(ExecutorTask* task, int device_id, unsigned int step_time_ms = 200);
+
     // expand/contract # threads depending on # submodels
-    void add_iothread_pair(int submodel_id, std::mutex* m_dumpster_lock, uint8_t*& dumpster);
+    void add_iothread_pair(int submodel_id, std::mutex* m_dumpster_lock, uint8_t* &dumpster);
     void remove_iothread_pair(int submodel_id);
 
     // download and start stream to real hardware
@@ -118,7 +134,7 @@ class DFPExecutor
     // get temps for each chip on this device (const ref to this->)
     const std::vector<float> &avg_all_temps();
     const std::vector<float>  inst_all_temps();
-    
+
     // get powers (if possible)
     bool can_get_power;
     float avg_power();
@@ -134,13 +150,14 @@ class DFPExecutor
     void set_next_power_mode(MX::Types::MxFrequencyOption fop);
 
   private:
-    const BlockyQueue<ExecutorTask*> *my_exec_queue;
+    const uint8_t device_id;
+    const BlockyQueue<ExecutorTask*>* my_exec_queue;
 
     bool open_device(DFPContext* d);
-    uint8_t device_id;
+    bool run_autoclock(ExecutorTask* task);
     std::vector<device_info_t>* devinfos;
 
-    int n_models; // used later!
+    LockedVar<int> n_models; // used later!
     bool has_any_threadpair_hit_frame_limit() const;
 
     uint8_t num_chips; // number of chips on this device (set in open_device())
@@ -155,6 +172,8 @@ class DFPExecutor
     // set the power mode for this device
     bool set_power_mode(MX::Types::MxFrequencyOption fop);
 
+    // for forcibly interrupting the current DFP when power limits get exceeded
+    void interrupt_task();
 
     //--------------------------------------------------------------------------------
 
@@ -171,6 +190,11 @@ class DFPExecutor
     uint16_t c4_volt;
     uint16_t c2_freq;
     uint16_t c2_volt;
+    // ct = current task
+    LockedVar<bool> ct_autoclock_enabled;
+    LockedVar<unsigned int> ct_power_limit_mw;
+    LockedVar<MX::Types::MxFrequencyOption*> ct_freq_option_ptr;
+    LockedVar<MX::Types::MxFrequencyOption>  ct_original_freq_option;
 
 
     // hardware monitor thread's loop function
@@ -198,7 +222,7 @@ class DFPExecutor
 
     // the complete window of powers so far
     std::deque<float> power_window;
-    
+
     // the complete window of pressures so far
     std::deque<float> pressure_window;
 
@@ -226,7 +250,7 @@ class DFPExecutor
 class ModelThreadPair
 {
   public:
-    ModelThreadPair(const DFPExecutor *my_dfpexec_);
+    ModelThreadPair(const DFPExecutor* my_dfpexec_);
     ~ModelThreadPair();
 
     friend class DFPExecutor;
@@ -278,7 +302,7 @@ class ModelThreadPair
     void input_loop();
     void output_loop();
 
-    const DFPExecutor *my_dfpexec;
+    const DFPExecutor* my_dfpexec;
 
     // 3'b000=run, 3'b010=halt, 3'b011=force-halt, 3'b101=terminate
     enum StopFlags : char {

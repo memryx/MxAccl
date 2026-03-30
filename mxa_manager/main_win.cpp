@@ -6,6 +6,7 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/sinks/win_eventlog_sink.h>
+#include "spdlog/cfg/env.h"
 #include "server.h"
 
 #define SVCNAME "MxaManagerSvc"
@@ -162,7 +163,7 @@ void WINAPI ServiceMain(DWORD argc, LPSTR *argv) {
     unsigned short base_port = 10000;
     std::string log_level = "";
     unsigned int hw_monitor_interval = 500;
-    if (!parse_config_file(addr, base_port)) {
+    if (!parse_config_file(addr, base_port, log_level, hw_monitor_interval)) {
         spdlog::error("Configuration parse failed", EVENTLOG_ERROR_TYPE);
         ReportServiceStatus(SERVICE_STOPPED, NO_ERROR, 0);
         return;

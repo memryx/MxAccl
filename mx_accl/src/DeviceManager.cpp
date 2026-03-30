@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -10,6 +10,7 @@
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
+#include <set>
 
 #include "spdlog/spdlog.h"
 
@@ -24,10 +25,8 @@ using namespace std;
 
 DeviceManager::DeviceManager()
 {
-
-    all_devices_count = 0;
+    all_devices_count = -1; // -1 means not discovered yet
     read_power_mode();
-    discover_done = false;
     local_device_in_use.clear();
 }
 
@@ -35,12 +34,55 @@ DeviceManager::~DeviceManager()
 {
 }
 
+std::vector<int> DeviceManager::convert_device_ids(const std::vector<int>& device_ids) 
+{
+    if (device_ids.empty()) {
+        throw std::runtime_error("Argument device_ids_to_use is not allowed to be empty.");
+    }
+
+    if (all_devices_count == -1) {
+        throw std::runtime_error("Device count has not been discovered yet. Please call discover_devices_direct() first.");
+    }
+
+    if (all_devices_count == 0) {
+        throw std::runtime_error("No memryx devices found. Plesae check if the driver is properly installed and device is properly connected.");
+    }
+
+    std::vector<int> converted_ids(all_devices_count);
+    if (device_ids.size() == 1 && device_ids[0] == -1) {
+        // convert -1 to a vector of all device ids
+        for (int i = 0; i < all_devices_count; i++) {
+            converted_ids[i] = i;
+        }
+
+    } else {
+
+        // check that all device ids are valid (between 0 and all_devices_count-1)
+        for (int device_id : device_ids) {
+            if (device_id < 0 || device_id >= all_devices_count) {
+                throw std::runtime_error("User provides invalid device id: " + std::to_string(device_id));
+            }
+        }
+
+        // Compare sizes to see if duplicates existed
+        std::set<int> unique_set(device_ids.begin(), device_ids.end());
+        if (unique_set.size() < device_ids.size()) {
+            spdlog::warn("Duplicate device IDs detected. Removing duplicates.");
+            converted_ids.assign(unique_set.begin(), unique_set.end());
+        }
+        else {
+            converted_ids = device_ids;
+        }
+    }
+
+    return converted_ids;
+}
 
 bool DeviceManager::discover_devices_direct()
 {
     std::lock_guard<std::mutex> lock(m_discover);
 
-    if(discover_done == true) {
+    if(all_devices_count > -1) {
         spdlog::debug("[DeviceManager] Devices already discovered, skipping discovery.");
         return true;
     }
@@ -74,6 +116,12 @@ bool DeviceManager::discover_devices_direct()
         device_infos[d].chips_per_group = (hwinfo64 & ((uint64_t)0xFFL << 32)) >> 32;
         device_infos[d].num_groups = (hwinfo64 & ((uint64_t)0xFFL << 48)) >> 48;
 
+        if((hwinfo64 & 0xFF) == 0x2){
+            device_infos[d].is_usb = false;
+        } else {
+            device_infos[d].is_usb = true;
+        }
+
         // figure out the correct MEMX_MPU_GROUP_CONFIG_* value from the number of chips and groups
         if(device_infos[d].chip_count == 8 && device_infos[d].num_groups == 1) {
             device_infos[d].current_config = MEMX_MPU_GROUP_CONFIG_ONE_GROUP_EIGHT_MPUS;
@@ -85,7 +133,7 @@ bool DeviceManager::discover_devices_direct()
             device_infos[d].current_config = MEMX_MPU_GROUP_CONFIG_TWO_GROUP_TWO_MPUS;
         }
         else if (device_infos[d].chip_count == 2 && device_infos[d].num_groups == 1) {
-           device_infos[d].current_config = MEMX_MPU_GROUP_CONFIG_ONE_GROUP_TWO_MPUS;
+            device_infos[d].current_config = MEMX_MPU_GROUP_CONFIG_ONE_GROUP_TWO_MPUS;
         }
         else {
             // invalid configuration
@@ -126,7 +174,6 @@ bool DeviceManager::discover_devices_direct()
 
     }
 
-    discover_done = true;
     return true;
 }
 
@@ -135,7 +182,7 @@ bool DeviceManager::discover_devices_remote(Client* client)
 {
     std::lock_guard<std::mutex> lock(m_discover);
 
-    if(discover_done == true) {
+    if(all_devices_count > -1) {
         spdlog::debug("[DeviceManager] Devices already discovered, skipping discovery.");
         return true;
     }
@@ -155,7 +202,6 @@ bool DeviceManager::discover_devices_remote(Client* client)
     }
     local_device_in_use.resize(all_devices_count, false);
 
-    discover_done = true;
     return true;
 }
 
@@ -315,7 +361,8 @@ bool DeviceManager::configure_groups(int device_id, int device_chip_count, int p
     else if(pdfp_num_chips == 2) {
         if (device_chip_count == 2) {
             status = memx_config_mpu_group(device_id, MEMX_MPU_GROUP_CONFIG_ONE_GROUP_TWO_MPUS);
-        } else {
+        }
+        else {
             status = memx_config_mpu_group(device_id, MEMX_MPU_GROUP_CONFIG_TWO_GROUP_TWO_MPUS);
         }
     }

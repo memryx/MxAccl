@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -65,6 +65,13 @@ class IDTracker
 
     // print contents
     void     print();
+
+    // Returns the number of IDs currently in use (created and not retired).
+    size_t active_count();
+
+    // Empties the ID tracker, retiring all active IDs. 
+    // Mainly used for testing to reset state between tests.
+    void clear();
 };
 
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -235,8 +235,8 @@ class Listener
                     mxasio::local::stream_protocol::endpoint(full_address));
 
             std::filesystem::permissions(full_address,
-                    std::filesystem::perms::all,
-                    std::filesystem::perm_options::replace);
+                                         std::filesystem::perms::all,
+                                         std::filesystem::perm_options::replace);
         }
     }
 
