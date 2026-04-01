@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.13)
 
-project(MX_API)
+project(MxAccl)
 
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
@@ -118,10 +118,13 @@ SET(CPUINFO_LIBRARY_TYPE "static" CACHE STRING "Type of cpuinfo library to build
 SET(CPUINFO_RUNTIME_TYPE "static" CACHE STRING "Type of runtime library (shared, static, or default) to use")
 SET(CPUINFO_LOG_LEVEL "fatal" CACHE STRING "Minimum logging level (info with lower severity will be ignored)")
 OPTION(CPUINFO_BUILD_TOOLS "Build command-line tools" OFF)
+OPTION(CPUINFO_BUILD_UNIT_TESTS "Build cpuinfo unit tests" OFF)
+OPTION(CPUINFO_BUILD_MOCK_TESTS "Build cpuinfo mock tests" OFF)
 OPTION(CPUINFO_BUILD_BENCHMARKS "Build cpuinfo micro-benchmarks" OFF)
 OPTION(CPUINFO_BUILD_PKG_CONFIG "Build pkg-config manifest" OFF)
 OPTION(USE_SYSTEM_LIBS "Use system libraries instead of downloading and building them" OFF)
 OPTION(USE_SYSTEM_GOOGLEBENCHMARK "Use system Google Benchmark library instead of downloading and building it" OFF)
+OPTION(USE_SYSTEM_GOOGLETEST "Use system Google Test library instead of downloading and building it" OFF)
 add_subdirectory(extern/cpuinfo)
 
 target_compile_options(cpuinfo PRIVATE -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable -Wno-implicit-fallthrough)
