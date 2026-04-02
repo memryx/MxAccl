@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -81,6 +81,37 @@ void MX::Types::ShapeVector::set_ch_first()
     shape = this->chfirst_shape();
 }
 
+bool MX::Types::ShapeVector::operator==(const ShapeVector& other) const
+{
+    if (this->size() != other.size()) {
+        return false;
+    }
+    for (int i = 0; i < this->size(); ++i) {
+        if (this->shape[i] != other.shape[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool MX::Types::ShapeVector::operator!=(const ShapeVector& other) const
+{
+    return !(*this == other);
+}
+
+std::string MX::Types::ShapeVector::to_string() const
+{
+    std::string result = "[";
+    for (size_t i = 0; i < shape.size(); ++i) {
+        result += std::to_string(shape[i]);
+        if (i < shape.size() - 1) {
+            result += ", ";
+        }
+    }
+    result += "]";
+    return result;
+}
+
 
 MxVoltageOption MX::Types::getVoltageFromFrequency(MxFrequencyOption freq)
 {
@@ -90,7 +121,7 @@ MxVoltageOption MX::Types::getVoltageFromFrequency(MxFrequencyOption freq)
         case MxFrequencyOption::FREQ_250MHz:
         case MxFrequencyOption::FREQ_275MHz:
             return MxVoltageOption::VOLT_670mV;
-        
+
         case MxFrequencyOption::FREQ_300MHz:
         case MxFrequencyOption::FREQ_325MHz:
             return MxVoltageOption::VOLT_675mV;
@@ -99,7 +130,7 @@ MxVoltageOption MX::Types::getVoltageFromFrequency(MxFrequencyOption freq)
         case MxFrequencyOption::FREQ_350MHz:
         case MxFrequencyOption::FREQ_375MHz:
             return MxVoltageOption::VOLT_680mV;
-        
+
         case MxFrequencyOption::FREQ_400MHz:
         case MxFrequencyOption::FREQ_425MHz:
         case MxFrequencyOption::FREQ_450MHz:
@@ -109,14 +140,14 @@ MxVoltageOption MX::Types::getVoltageFromFrequency(MxFrequencyOption freq)
         case MxFrequencyOption::FREQ_500MHz:
         case MxFrequencyOption::FREQ_525MHz:
             return MxVoltageOption::VOLT_690mV;
-        
+
         case MxFrequencyOption::FREQ_550MHz:
         case MxFrequencyOption::FREQ_575MHz:
             return MxVoltageOption::VOLT_695mV;
 
         case MxFrequencyOption::FREQ_600MHz:
             return MxVoltageOption::VOLT_700mV;
-        
+
         case MxFrequencyOption::FREQ_625MHz:
             return MxVoltageOption::VOLT_705mV;
 
@@ -125,13 +156,13 @@ MxVoltageOption MX::Types::getVoltageFromFrequency(MxFrequencyOption freq)
 
         case MxFrequencyOption::FREQ_675MHz:
             return MxVoltageOption::VOLT_720mV;
-        
+
         case MxFrequencyOption::FREQ_700MHz:
             return MxVoltageOption::VOLT_725mV;
 
         case MxFrequencyOption::FREQ_725MHz:
             return MxVoltageOption::VOLT_740mV;
-        
+
         case MxFrequencyOption::FREQ_750MHz:
             return MxVoltageOption::VOLT_745mV;
 
@@ -140,28 +171,28 @@ MxVoltageOption MX::Types::getVoltageFromFrequency(MxFrequencyOption freq)
 
         case MxFrequencyOption::FREQ_800MHz:
             return MxVoltageOption::VOLT_760mV;
-        
+
         case MxFrequencyOption::FREQ_825MHz:
             return MxVoltageOption::VOLT_770mV;
-        
+
         case MxFrequencyOption::FREQ_850MHz:
             return MxVoltageOption::VOLT_780mV;
-        
+
         case MxFrequencyOption::FREQ_875MHz:
             return MxVoltageOption::VOLT_790mV;
-        
+
         case MxFrequencyOption::FREQ_900MHz:
             return MxVoltageOption::VOLT_800mV;
-        
+
         case MxFrequencyOption::FREQ_925MHz:
             return MxVoltageOption::VOLT_815mV;
-        
+
         case MxFrequencyOption::FREQ_950MHz:
             return MxVoltageOption::VOLT_820mV;
-        
+
         case MxFrequencyOption::FREQ_975MHz:
             return MxVoltageOption::VOLT_835mV;
-        
+
         case MxFrequencyOption::FREQ_1000MHz:
             return MxVoltageOption::VOLT_850mV;
 
@@ -171,12 +202,14 @@ MxVoltageOption MX::Types::getVoltageFromFrequency(MxFrequencyOption freq)
 }
 
 
-std::string MX::Types::mxFrequencyOptionToString(MxFrequencyOption freq){
+std::string MX::Types::mxFrequencyOptionToString(MxFrequencyOption freq)
+{
     // if 0, return "USE_CONF"
     // else return the number as string + MHz
     if (freq == MxFrequencyOption::FREQ_USE_CONF) {
         return "USE_CONF";
-    } else {
+    }
+    else {
         return std::to_string(static_cast<int>(freq)) + "MHz";
     }
 }

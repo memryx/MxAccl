@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -29,13 +29,15 @@ namespace MX
 {
 namespace Types
 {
-enum MEMX_API_EXPORT MX_data_format : uint8_t { MX_FMT_GBF80  = 0,
-                                                MX_FMT_RGB565 = 1,
-                                                MX_FMT_RGB888 = 2,
-                                                MX_FMT_YUV422 = 3,
-                                                MX_FMT_BF16   = 4,
-                                                MX_FMT_FP32   = 5,
-                                                MX_FMT_GBF80_ROW = 6};
+enum MEMX_API_EXPORT MX_data_format : uint8_t {
+    MX_FMT_GBF80  = 0,
+    MX_FMT_RGB565 = 1,
+    MX_FMT_RGB888 = 2,
+    MX_FMT_YUV422 = 3,
+    MX_FMT_BF16   = 4,
+    MX_FMT_FP32   = 5,
+    MX_FMT_GBF80_ROW = 6
+};
 
 enum MEMX_API_EXPORT FeatureMap_Type { FM_DFP, FM_PRE, FM_POST, FM_PREPOST };
 
@@ -44,12 +46,12 @@ enum MEMX_API_EXPORT FeatureMap_Type { FM_DFP, FM_PRE, FM_POST, FM_PREPOST };
  * @brief Encapsulates data buffers used by MxAccl for input and output feature maps.
  *
  * The FeatureMap class represents a data container used internally by MxAccl to manage
- * tensor data across the accelerator interface. It provides methods to safely send 
+ * tensor data across the accelerator interface. It provides methods to safely send
  * (`set_data`) and retrieve (`get_data`) data while abstracting low-level memory management.
  */
 class FeatureMap
 {
-public:
+  public:
     /**
      * @brief Constructs a FeatureMap by allocating a data block of the given size and
      *        setting its dimensions and format.
@@ -128,26 +130,9 @@ public:
     MEMX_API_EXPORT uint8_t* get_formatted_data();
 
     MEMX_API_EXPORT ~FeatureMap();
-    //sets the the in_ready flag to user input
-    MEMX_API_EXPORT void set_in_ready(bool flag);
-    //sets the the out_ready flag to user input
-    MEMX_API_EXPORT void set_out_ready(bool flag);
-    //return in_ready flag
-    MEMX_API_EXPORT bool get_in_ready() const;
-    //returns out_ready flag
-    MEMX_API_EXPORT bool get_out_ready() const;
-    // Transpose function to use if channel first is required
-    MEMX_API_EXPORT void transpose_hwdc_chwd(const void* vinput, void* voutput) const;
-    //transpose function to use if channel last is required
-    MEMX_API_EXPORT void transpose_chwd_hwdc(const void* vinput, void* voutput) const;
 
-    // types of ops:
-    //  '+' add dim: no affect on data
-    //  '-' remove dim: no affect on data
-    //  'transpose': affects data and moves axis around
-    //  'reshape': does not actually change anything in the 1D data
-
-    // for now, we'll just support +/- (as no-op)
+    //vinput -->vinput reordered with permuted_indices, thus efficiently applying folded ops
+    MEMX_API_EXPORT void apply_folded_ops(const void* vinput, void* voutput) const;
 
     //copy assignment operator
     MEMX_API_EXPORT FeatureMap &operator=(const FeatureMap &rhs);
@@ -163,26 +148,25 @@ public:
     bool use_model_shape_;
 
     // non-exposed functions for use with pre/post within MxModel
-    void set_data_force_tpose(float* in_data, bool do_a_tpose) const;
-    void get_data_force_tpose(float* out_data, bool do_a_tpose) const;
+    void set_data_force_foldedops(float* in_data, bool do_foldedops) const;
+    void get_data_force_foldedops(float* out_data, bool do_foldedops) const;
 
+    // set to random data [0.0,1.0]
+    void set_random_data() const;
 
+    void convert_data(void* vdata) const; // converts *data -> *formatted_data
+    void unconvert_data(void* vdata) const; // converts *formatted_data -> *data
+    
   private:
-    mutable uint32_t* fmap_data; // data in user-facing format (float or uint8_t)
+    mutable uint32_t* fmap_data; // data in user-facing format (float)
     mutable uint32_t* temp_float_buffer;
     uint32_t* fmap_data_internal;
     uint32_t* temp_float_buffer_internal;
     size_t featureMap_size; // size, in terms of user-facing format
     MX_data_format fmt; // data format
     uint8_t* formatted_data;
-    void convert_data(void* vdata) const; // converts *data -> *formatted_data
-    void unconvert_data(void* vdata) const; // converts *formatted_data -> *data
     void calc_convert_size_and_new(); // calculates size for and allocates formatted bytes
-    mutable SharedLockedVar<bool> out_ready; //flag that is used by MxModel
-    mutable SharedLockedVar<bool> in_ready; //flag that is used by MxModel
-    std::mutex wait_m; //
-    bool wait_flag;
-    std::condition_variable wait_cv;
+
 
     /* dimension variables used for GBF calculations, shape and transofrms*/
     uint16_t dim_h;      // shape dimension x (height)
@@ -192,17 +176,11 @@ public:
     uint32_t hpoc_dim_c;
     bool     hpoc_en;
     uint16_t hpoc_list_length; // HPOC channel list length
-    uint16_t *hpoc_dummy_channels; // list of dummy channels to remove
+    uint16_t* hpoc_dummy_channels; // list of dummy channels to remove
 
     int fmap_convert_threads_;
 
     Dfp::PortInfo* pinfo;
-
-    // common case: just transpose between HWC and CHW
-    bool only_transpose;
-    void detect_only_transpose();
-
-    //void painfully_do_every_operation(const float* input, float* output, bool reverse) const;
 
     // stored constants for format en/decoding
     //-------------------------------------------------

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -138,6 +138,19 @@ void IDTracker::retire(uint32_t id)
     }
 }
 
+void IDTracker::clear()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (sequential_order) {
+        free_id_list.clear();
+        for(uint32_t i = 0; i < max_sequential_val; i++) {
+            free_id_list.push_back(i);
+        }
+    } else {
+        ids.clear();
+    }
+}
+
 // prints current clientlist data
 void IDTracker::print()
 {
@@ -155,6 +168,18 @@ void IDTracker::print()
         }
     }
     std::cout << std::endl;
+}
+
+// Returns how many IDs have been created and not retired
+size_t IDTracker::active_count()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    
+    if (sequential_order) {
+        return static_cast<size_t>(max_sequential_val) - free_id_list.size();
+    } else {
+        return ids.size();
+    }
 }
 
 } // namespace Utils

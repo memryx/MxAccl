@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -23,21 +23,24 @@ FeatureMap::FeatureMap(size_t size, MX_data_format format, uint16_t dim_h, uint1
     // HPOC notes: 'size' includes hpoc_dim_c when hpoc is enabled, while num_chan is always the final dim_c size
     if(port_info != nullptr) {
         hpoc_en = port_info->hpoc_en;
-        if(hpoc_en){
+        if(hpoc_en) {
             hpoc_dim_c = port_info->hpoc_dim_c;
             hpoc_list_length = port_info->hpoc_list_length;
             if(hpoc_list_length > 0) {
                 hpoc_dummy_channels = new uint16_t[hpoc_list_length];
                 std::memcpy(hpoc_dummy_channels, port_info->hpoc_dummy_channels, hpoc_list_length * sizeof(uint16_t));
-            } else {
+            }
+            else {
                 hpoc_dummy_channels = nullptr;
             }
-        } else {
+        }
+        else {
             hpoc_dim_c = 0;
             hpoc_list_length = 0;
             hpoc_dummy_channels = nullptr;
         }
-    } else {
+    }
+    else {
         hpoc_en = false;
         hpoc_dim_c = 0;
         hpoc_list_length = 0;
@@ -53,7 +56,6 @@ FeatureMap::FeatureMap(size_t size, MX_data_format format, uint16_t dim_h, uint1
     featureMap_size = size;
     fmt = format;
     fmap_convert_threads_ = fmap_convert_threads;
-    only_transpose = false;
 
     // defaults
     real_dim_c = 1;
@@ -69,20 +71,18 @@ FeatureMap::FeatureMap(size_t size, MX_data_format format, uint16_t dim_h, uint1
     }
 
     // special case for pre/post FM_ fmaps
-    if(dim_h == 0 && dim_w == 0 && dim_z == 0 && num_chan == 0 && port_info == nullptr && fmt == MX_FMT_FP32){
-       this->dim_h = 1;
-       this->dim_w = 1;
-       this->dim_z = 1;
-       this->dim_c = size;
-       fm_type = FM_PREPOST;
-       use_model_shape_ = false;
-       pinfo = nullptr;
-       formatted_data = nullptr;
-       calc_convert_size_and_new();
-       out_ready.store(true);
-       in_ready.store(true);
-       wait_flag = true;
-    } else { 
+    if(dim_h == 0 && dim_w == 0 && dim_z == 0 && num_chan == 0 && port_info == nullptr && fmt == MX_FMT_FP32) {
+        this->dim_h = 1;
+        this->dim_w = 1;
+        this->dim_z = 1;
+        this->dim_c = size;
+        fm_type = FM_PREPOST;
+        use_model_shape_ = false;
+        pinfo = nullptr;
+        formatted_data = nullptr;
+        calc_convert_size_and_new();
+    }
+    else {
 
         // no dims can be 0
         if(dim_h == 0 || dim_w == 0 || dim_z == 0 || num_chan == 0) {
@@ -104,132 +104,26 @@ FeatureMap::FeatureMap(size_t size, MX_data_format format, uint16_t dim_h, uint1
             pinfo->raw_shape = port_info->raw_shape;
             pinfo->raw_dtype = port_info->raw_dtype;
             pinfo->shape_shift_info = port_info->shape_shift_info;
+            pinfo->permuted_indices = port_info->permuted_indices;
 
             // hpoc
             pinfo->hpoc_en = port_info->hpoc_en;
-            if(pinfo->hpoc_en){
+            if(pinfo->hpoc_en) {
                 pinfo->hpoc_dim_c = port_info->hpoc_dim_c;
                 pinfo->hpoc_list_length = port_info->hpoc_list_length;
                 if(pinfo->hpoc_list_length > 0) {
                     pinfo->hpoc_dummy_channels = new uint16_t[pinfo->hpoc_list_length];
                     std::memcpy(pinfo->hpoc_dummy_channels, port_info->hpoc_dummy_channels, pinfo->hpoc_list_length * sizeof(uint16_t));
-                } else {
+                }
+                else {
                     pinfo->hpoc_dummy_channels = nullptr;
                 }
-            } else {
+            }
+            else {
                 pinfo->hpoc_dim_c = 0;
                 pinfo->hpoc_list_length = 0;
                 pinfo->hpoc_dummy_channels = nullptr;
             }
-
-            //// debug print all the pinfo stuff for use_model_shape
-            //std::cout << "FeatureMap PortInfo: " << std::endl;
-            //std::cout << "  batch: " << pinfo->batch << std::endl;
-            //std::cout << "  raw_shape: ";
-            //for(const auto& shape : pinfo->raw_shape) {
-            //    std::cout << shape.first << ":" << shape.second << " ";
-            //}
-            //std::cout << std::endl;
-            //std::cout << "  raw_dtype: " << pinfo->raw_dtype << std::endl;
-            //std::cout << "  shape_shift_info: ";
-            //// print the values of rht shape_shift_info_t type struct
-            //std::cout << "   add: ";
-            //for(const auto& add : pinfo->shape_shift_info.add) {
-            //    std::cout << add << " ";
-            //}
-            //std::cout << std::endl << "   remove: ";
-            //for(const auto& remove : pinfo->shape_shift_info.remove) {
-            //    std::cout << remove << " ";
-            //}
-            //std::cout << std::endl << "   folded_optype: ";
-            //for(const auto& optype : pinfo->shape_shift_info.folded_optype) {
-            //    std::cout << optype << " ";
-            //}
-
-            if(pinfo->shape_shift_info.folded_optype.size() == 1) {
-                if(pinfo->shape_shift_info.folded_optype[0] == "legacy_channel_transpose") {
-                    only_transpose = true;
-                }
-            }
-
-            //std::cout << std::endl << "   folded_opshape: ";
-            //for(const auto& opshape : pinfo->shape_shift_info.folded_opshape) {
-            //    std::cout << "[";
-            //    for(const auto& dim : opshape) {
-            //        std::cout << dim << " ";
-            //    }
-            //    std::cout << "] ";
-            //}
-            //std::cout << std::endl;
-
-            // check for the common cases of channel first/last transposes
-            detect_only_transpose();
-
-
-            //// special case: if both shapes just consist of singleton dimensions + 1 non-singleton dimension,
-            ////               we skip all operations and ignore model_shape / only_transpose
-            ////
-            //// first check if raw_shape is all singleton dimensions except for one [position doesn't matter]
-            //int raw_nonsingleton_count = 0;
-            //for(const auto &shape : pinfo->raw_shape) {
-            //    if(shape.second != 1) {
-            //        raw_nonsingleton_count++;
-            //    }
-            //}
-
-            //int dims_nonsingleton_count = 0;
-            //if(dim_h != 1) { dims_nonsingleton_count++; }
-            //if(dim_w != 1) { dims_nonsingleton_count++; }
-            //if(dim_z != 1) { dims_nonsingleton_count++; }
-            //if(num_chan != 1) { dims_nonsingleton_count++; }
-
-            //if( (raw_nonsingleton_count == 1 && dims_nonsingleton_count == 1) ||
-            //        (raw_nonsingleton_count == 0 && dims_nonsingleton_count == 0)) {
-            //    // we can skip all operations and just use the data as is
-            //    only_transpose = false;
-            //    use_model_shape_ = false;
-            //    pinfo->shape_shift_info.folded_optype.clear();
-            //    pinfo->shape_shift_info.add.clear();
-            //    pinfo->shape_shift_info.remove.clear();
-            //    pinfo->shape_shift_info.folded_opshape.clear();
-            //}
-
-
-            //// another special case: if the raw_shape and dims are the same values and in the same order,
-            //// but there are singleton dimensions mixed in either, we can also skip all operations
-
-            //// algorithm: copy raw_shape and the dims into two vectors, removing all singleton dimensions along the way
-            //// then compare the two vectors
-            //std::vector<int> raw_shape_dims;
-            //for(unsigned int i = 0; i < pinfo->raw_shape.size(); i++) {
-            //    if(pinfo->raw_shape[i] != 1 && pinfo->raw_shape[i] != 0) {
-            //        raw_shape_dims.push_back(pinfo->raw_shape[i]);
-            //    }
-            //}
-            //std::vector<int> dims;
-            //if(dim_h != 1) { dims.push_back(dim_h); }
-            //if(dim_w != 1) { dims.push_back(dim_w); }
-            //if(dim_z != 1) { dims.push_back(dim_z); }
-            //if(num_chan != 1) { dims.push_back(num_chan); }
-
-            //if(raw_shape_dims.size() == dims.size()) {
-            //    bool same = true;
-            //    for(size_t i = 0; i < raw_shape_dims.size(); i++) {
-            //        if(raw_shape_dims[i] != dims[i]) {
-            //            same = false;
-            //            break;
-            //        }
-            //    }
-            //    if(same) {
-            //        // we can skip all operations and just use the data as is
-            //        only_transpose = false;
-            //        use_model_shape_ = false;
-            //        pinfo->shape_shift_info.folded_optype.clear();
-            //        pinfo->shape_shift_info.add.clear();
-            //        pinfo->shape_shift_info.remove.clear();
-            //        pinfo->shape_shift_info.folded_opshape.clear();
-            //    }
-            //}
 
         }
         else {
@@ -242,10 +136,6 @@ FeatureMap::FeatureMap(size_t size, MX_data_format format, uint16_t dim_h, uint1
         dim_c = num_chan;
         formatted_data = nullptr;
         calc_convert_size_and_new();
-        out_ready.store(true);
-        in_ready.store(true);
-        wait_flag = true;
-
     }
 
 }
@@ -256,21 +146,24 @@ FeatureMap::FeatureMap(float* in_data, size_t size, MX_data_format format,  uint
     // HPOC notes: 'size' includes hpoc_dim_c when hpoc is enabled, while num_chan is always the final dim_c size
     if(port_info != nullptr) {
         hpoc_en = port_info->hpoc_en;
-        if(hpoc_en){
+        if(hpoc_en) {
             hpoc_dim_c = port_info->hpoc_dim_c;
             hpoc_list_length = port_info->hpoc_list_length;
             if(hpoc_list_length > 0) {
                 hpoc_dummy_channels = new uint16_t[hpoc_list_length];
                 std::memcpy(hpoc_dummy_channels, port_info->hpoc_dummy_channels, hpoc_list_length * sizeof(uint16_t));
-            } else {
+            }
+            else {
                 hpoc_dummy_channels = nullptr;
             }
-        } else {
+        }
+        else {
             hpoc_dim_c = 0;
             hpoc_list_length = 0;
             hpoc_dummy_channels = nullptr;
         }
-    } else {
+    }
+    else {
         hpoc_en = false;
         hpoc_dim_c = 0;
         hpoc_list_length = 0;
@@ -278,7 +171,7 @@ FeatureMap::FeatureMap(float* in_data, size_t size, MX_data_format format,  uint
     }
 
     fm_type = FM_DFP; // default
-    
+
     fmap_data = new uint32_t[size];
     fmap_data_internal = fmap_data;
     temp_float_buffer = new uint32_t[size];
@@ -320,48 +213,26 @@ FeatureMap::FeatureMap(float* in_data, size_t size, MX_data_format format,  uint
         pinfo->raw_shape = port_info->raw_shape;
         pinfo->raw_dtype = port_info->raw_dtype;
         pinfo->shape_shift_info = port_info->shape_shift_info;
+        pinfo->permuted_indices = port_info->permuted_indices;
 
         // hpoc
         pinfo->hpoc_en = port_info->hpoc_en;
-        if(pinfo->hpoc_en){
+        if(pinfo->hpoc_en) {
             pinfo->hpoc_dim_c = port_info->hpoc_dim_c;
             pinfo->hpoc_list_length = port_info->hpoc_list_length;
             if(pinfo->hpoc_list_length > 0) {
                 pinfo->hpoc_dummy_channels = new uint16_t[pinfo->hpoc_list_length];
                 std::memcpy(pinfo->hpoc_dummy_channels, port_info->hpoc_dummy_channels, pinfo->hpoc_list_length * sizeof(uint16_t));
-            } else {
+            }
+            else {
                 pinfo->hpoc_dummy_channels = nullptr;
             }
-        } else {
+        }
+        else {
             pinfo->hpoc_dim_c = 0;
             pinfo->hpoc_list_length = 0;
             pinfo->hpoc_dummy_channels = nullptr;
         }
-
-        // check for the common cases of channel first/last transposes
-        detect_only_transpose();
-
-        //// special case
-        //int raw_nonsingleton_count = 0;
-        //for(const auto &shape : pinfo->raw_shape) {
-        //    if(shape.second != 1) {
-        //        raw_nonsingleton_count++;
-        //    }
-        //}
-        //int dims_nonsingleton_count = 0;
-        //if(dim_h != 1) { dims_nonsingleton_count++; }
-        //if(dim_w != 1) { dims_nonsingleton_count++; }
-        //if(dim_z != 1) { dims_nonsingleton_count++; }
-        //if(num_chan != 1) { dims_nonsingleton_count++; }
-        //if( (raw_nonsingleton_count == 1 && dims_nonsingleton_count == 1) ||
-        //        (raw_nonsingleton_count == 0 && dims_nonsingleton_count == 0)) {
-        //    only_transpose = false;
-        //    use_model_shape_ = false;
-        //    pinfo->shape_shift_info.folded_optype.clear();
-        //    pinfo->shape_shift_info.add.clear();
-        //    pinfo->shape_shift_info.remove.clear();
-        //    pinfo->shape_shift_info.folded_opshape.clear();
-        //}
 
     }
     else {
@@ -375,9 +246,6 @@ FeatureMap::FeatureMap(float* in_data, size_t size, MX_data_format format,  uint
     formatted_data = nullptr;
     calc_convert_size_and_new();
     convert_data(fmap_data);
-    out_ready.store(true);
-    in_ready.store(true);
-    wait_flag = true;
 }
 
 FeatureMap::FeatureMap(const FeatureMap &rhs)
@@ -402,7 +270,6 @@ FeatureMap::FeatureMap(const FeatureMap &rhs)
     featureMap_size = rhs.featureMap_size;
     fmt = rhs.fmt;
     use_model_shape_ = rhs.use_model_shape_;
-    only_transpose = rhs.only_transpose;
     fm_type = rhs.fm_type;
     if(use_model_shape_) {
         if(rhs.pinfo == nullptr) {
@@ -413,6 +280,8 @@ FeatureMap::FeatureMap(const FeatureMap &rhs)
         pinfo->raw_shape = rhs.pinfo->raw_shape;
         pinfo->raw_dtype = rhs.pinfo->raw_dtype;
         pinfo->shape_shift_info = rhs.pinfo->shape_shift_info;
+        pinfo->permuted_indices = rhs.pinfo->permuted_indices;
+
     }
     else {
         pinfo = nullptr;
@@ -435,9 +304,6 @@ FeatureMap::FeatureMap(const FeatureMap &rhs)
         formatted_data = new uint8_t[formatted_featuremap_size];
         std::memcpy(formatted_data, rhs.formatted_data, formatted_featuremap_size * sizeof(uint8_t));
     }
-    out_ready.store(true);
-    in_ready.store(true);
-    wait_flag = true;
 }
 
 FeatureMap &FeatureMap::operator=(const FeatureMap &rhs)
@@ -445,7 +311,7 @@ FeatureMap &FeatureMap::operator=(const FeatureMap &rhs)
     if(this == &rhs) {
         return *this;
     }
-    
+
     hpoc_en = rhs.hpoc_en;
     hpoc_dim_c = rhs.hpoc_dim_c;
     hpoc_list_length = rhs.hpoc_list_length;
@@ -454,7 +320,7 @@ FeatureMap &FeatureMap::operator=(const FeatureMap &rhs)
         hpoc_dummy_channels = new uint16_t[rhs.hpoc_list_length];
         std::memcpy(hpoc_dummy_channels, rhs.hpoc_dummy_channels, rhs.hpoc_list_length * sizeof(uint16_t));
     }
-    
+
     real_dim_c = rhs.real_dim_c;
     num_xyz_pixels = rhs.num_xyz_pixels;
     num_gbf_per_pixel = rhs.num_gbf_per_pixel;
@@ -466,7 +332,6 @@ FeatureMap &FeatureMap::operator=(const FeatureMap &rhs)
     featureMap_size = rhs.featureMap_size;
     fmt = rhs.fmt;
     use_model_shape_ = rhs.use_model_shape_;
-    only_transpose = rhs.only_transpose;
     fm_type = rhs.fm_type;
     if(use_model_shape_) {
         if(rhs.pinfo == nullptr) {
@@ -477,6 +342,7 @@ FeatureMap &FeatureMap::operator=(const FeatureMap &rhs)
         pinfo->raw_shape = rhs.pinfo->raw_shape;
         pinfo->raw_dtype = rhs.pinfo->raw_dtype;
         pinfo->shape_shift_info = rhs.pinfo->shape_shift_info;
+        pinfo->permuted_indices = rhs.pinfo->permuted_indices;
     }
     else {
         pinfo = nullptr;
@@ -517,31 +383,10 @@ FeatureMap &FeatureMap::operator=(const FeatureMap &rhs)
         formatted_data = new uint8_t[formatted_featuremap_size];
         std::memcpy(formatted_data, rhs.formatted_data, formatted_featuremap_size * sizeof(uint8_t));
     }
+
+    // note: does NOT copy over ready/wait flags
     return *this;
-    out_ready.store(true);
-    in_ready.store(true);
-    wait_flag = true;
 }
-
-
-//---------------------------------------------------------------------------------------------------------------------
-
-void FeatureMap::detect_only_transpose()
-{
-    // honestly, DFP shapes right now are useless for C++ where everything is 1D flat arrays...
-    // so let's just assume any transpose == channel first/last, else we no-op
-    if(pinfo != nullptr) {
-        // "transpose" exists somewhere in the folded_optype vector
-        for(const auto& optype : pinfo->shape_shift_info.folded_optype) {
-            if(optype == "transpose") {
-                only_transpose = true;
-                break;
-            }
-        }
-    }
-}
-
-//---------------------------------------------------------------------------------------------------------------------
 
 void FeatureMap::calc_convert_size_and_new()
 {
@@ -578,6 +423,10 @@ void FeatureMap::calc_convert_size_and_new()
             any_remainder_chs = ((real_dim_c % 8) != 0);
             num_gbf_per_pixel = (real_dim_c / 8) + (any_remainder_chs ? 1 : 0);
             formatted_featuremap_size = num_xyz_pixels * num_gbf_per_pixel * 10;
+            // for hpoc later
+            gbf80_pixel_size = num_gbf_per_pixel * 10;
+            gbf80_row_size = dim_w * dim_z * gbf80_pixel_size;
+            flt32_row_size = dim_w  * dim_z * dim_c; // always dim_c (final shape), not real_dim_c from hardware
             // padding to 4 bytes-alignment
             formatted_featuremap_size = (formatted_featuremap_size + 3) & ~0x3L;
             // have to actually allocate this one
@@ -591,7 +440,7 @@ void FeatureMap::calc_convert_size_and_new()
             gbf80_pixel_size = num_gbf_per_pixel * 10;
             gbf80_row_size = dim_w * dim_z * gbf80_pixel_size;
             gbf80_row_size_rowpad = (gbf80_row_size + 3) & ~0x3;
-            flt32_row_size = dim_w  * dim_z * dim_c; // always dim_c (final shape), not real_dim_c from hardware
+            flt32_row_size = dim_w  * dim_z * dim_c;
 
             // padding to 4 bytes-alignment
             formatted_featuremap_size = dim_h * ((dim_w * dim_z * num_gbf_per_pixel * 10 + 3) & ~0x3L);
@@ -641,12 +490,12 @@ void FeatureMap::convert_data(void* vdata) const
             gbf80_row_offset += gbf80_row_size;
             flt32_row_offset += flt32_row_size;
         }
-    } else {
+    }
+    else {
         // for FP32, just copy the data as is
         std::memcpy(formatted_data, sdata, featureMap_size * sizeof(float));
     }
 }
-
 
 void FeatureMap::unconvert_data(void* vdata) const
 {
@@ -656,7 +505,7 @@ void FeatureMap::unconvert_data(void* vdata) const
     }
     else if (fmt == MX_FMT_GBF80) {
 
-        if(hpoc_en){
+        if(hpoc_en) {
             uint32_t gbf80_row_offset = 0;
             uint32_t flt32_row_offset = 0;
 
@@ -671,20 +520,21 @@ void FeatureMap::unconvert_data(void* vdata) const
                         // decode for each buf of GBF pixel
                         for (uint32_t gbf_ch_idx = 0, gbf_buf_offset = 0, flt32_buf_offset = 0; gbf_ch_idx < real_dim_c; gbf_ch_idx += 8, gbf_buf_offset += 10) {
                             uint32_t decode_float_buf[8] = {0};
-                            uint8_t *gbf80_buffer = (uint8_t *)(formatted_data + gbf80_row_offset + gbf80_pixel_offset + gbf_buf_offset);
+                            uint8_t* gbf80_buffer = (uint8_t*)(formatted_data + gbf80_row_offset + gbf80_pixel_offset + gbf_buf_offset);
                             gbf_decode(gbf80_buffer, decode_float_buf, 8);
 
                             for (uint32_t ch_offset = 0; ch_offset < 8; ++ch_offset) {
                                 uint32_t curr_ch_idx = gbf_ch_idx + ch_offset;
                                 // skip dummy channel
                                 if ((check_dummy_ch_idx < real_dim_c) &&
-                                    (curr_ch_idx == hpoc_dummy_channels[check_dummy_ch_idx])) {
+                                        (curr_ch_idx == hpoc_dummy_channels[check_dummy_ch_idx])) {
                                     check_dummy_ch_idx++;
                                     continue;
-                                } else {
+                                }
+                                else {
                                     // update target channel data of FP32 pixel
                                     if (gbf_ch_idx + ch_offset < real_dim_c) {
-                                        uint32_t *flt32_buffer = (ddata + flt32_row_offset + flt32_pixel_offset + flt32_buf_offset);
+                                        uint32_t* flt32_buffer = (ddata + flt32_row_offset + flt32_pixel_offset + flt32_buf_offset);
                                         *flt32_buffer = decode_float_buf[ch_offset];
                                         flt32_buf_offset++;
                                     }
@@ -725,20 +575,21 @@ void FeatureMap::unconvert_data(void* vdata) const
                         // decode for each buf of GBF pixel
                         for (uint32_t gbf_ch_idx = 0, gbf_buf_offset = 0, flt32_buf_offset = 0; gbf_ch_idx < real_dim_c; gbf_ch_idx += 8, gbf_buf_offset += 10) {
                             uint32_t decode_float_buf[8] = {0};
-                            uint8_t *gbf80_buffer = (uint8_t *)(formatted_data + gbf80_row_offset + gbf80_pixel_offset + gbf_buf_offset);
+                            uint8_t* gbf80_buffer = (uint8_t*)(formatted_data + gbf80_row_offset + gbf80_pixel_offset + gbf_buf_offset);
                             gbf_decode(gbf80_buffer, decode_float_buf, 8);
 
                             for (uint32_t ch_offset = 0; ch_offset < 8; ++ch_offset) {
                                 uint32_t curr_ch_idx = gbf_ch_idx + ch_offset;
                                 // skip dummy channel
                                 if ((check_dummy_ch_idx < real_dim_c) &&
-                                    (curr_ch_idx == hpoc_dummy_channels[check_dummy_ch_idx])) {
+                                        (curr_ch_idx == hpoc_dummy_channels[check_dummy_ch_idx])) {
                                     check_dummy_ch_idx++;
                                     continue;
-                                } else {
+                                }
+                                else {
                                     // update target channel data of FP32 pixel
                                     if (gbf_ch_idx + ch_offset < real_dim_c) {
-                                        uint32_t *flt32_buffer = (ddata + flt32_row_offset + flt32_pixel_offset + flt32_buf_offset);
+                                        uint32_t* flt32_buffer = (ddata + flt32_row_offset + flt32_pixel_offset + flt32_buf_offset);
                                         *flt32_buffer = decode_float_buf[ch_offset];
                                         flt32_buf_offset++;
                                     }
@@ -768,11 +619,12 @@ void FeatureMap::unconvert_data(void* vdata) const
                         flt32_pixel_offset += real_dim_c;
                     }
                 }
-                gbf80_row_offset += gbf80_row_size;
+                gbf80_row_offset += gbf80_row_size_rowpad;
                 flt32_row_offset += flt32_row_size;
             }
         }
-    } else {
+    }
+    else {
         // for FP32, just copy the data as is
         std::memcpy(ddata, formatted_data, featureMap_size * sizeof(float));
     }
@@ -781,40 +633,16 @@ void FeatureMap::unconvert_data(void* vdata) const
 
 //---------------------------------------------------------------------------------------------------------------------
 
-void FeatureMap::transpose_hwdc_chwd(const void* __restrict vinput, void* __restrict voutput) const
+void FeatureMap::apply_folded_ops(const void* vinput, void* voutput) const
 {
     const uint32_t* __restrict input = (const uint32_t*) vinput;
     uint32_t* __restrict output = (uint32_t*) voutput;
-    #pragma omp for schedule(static)  // ignored if not parallel
-    for (unsigned int z = 0; z < dim_z; ++z) { // make this the outer loop to optimize for dim_z==1
-        for (unsigned int c = 0; c < dim_c; ++c) {
-            for (unsigned int h = 0; h < dim_h; ++h) {
-                for (unsigned int w = 0; w < dim_w; ++w) {
-                    output[c * dim_h * dim_w * dim_z + h * dim_w * dim_z + w * dim_z + z] =
-                        input[h * dim_w * dim_z * dim_c + w * dim_z * dim_c + z * dim_c + c];
-                }
-            }
-        }
+
+    #pragma omp simd
+    for(unsigned int i = 0; i < pinfo->permuted_indices.size(); ++i) {
+        output[i] = input[pinfo->permuted_indices[i]];
     }
 }
-
-void FeatureMap::transpose_chwd_hwdc(const void* __restrict vinput, void* __restrict voutput) const
-{
-    const uint32_t* __restrict input = (const uint32_t*) vinput;
-    uint32_t* __restrict output = (uint32_t*) voutput;
-    #pragma omp for collapse(3) schedule(static)  // ignored if not parallel
-    for (unsigned int z = 0; z < dim_z; ++z) { // make this the outer loop to optimize for dim_z==1
-        for (unsigned int h = 0; h < dim_h; ++h) {
-            for (unsigned int w = 0; w < dim_w; ++w) {
-                for (unsigned int c = 0; c < dim_c; ++c) {
-                    output[h * dim_w * dim_z * dim_c + w * dim_z * dim_c + z * dim_c + c] =
-                        input[c * dim_h * dim_w * dim_z + h * dim_w * dim_z + w * dim_z + z];
-                }
-            }
-        }
-    }
-}
-
 
 void* FeatureMap::get_data_ptr()
 {
@@ -831,9 +659,9 @@ MX_status FeatureMap::get_data(float* out_data) const
     #pragma omp parallel if(fmap_convert_threads_ > 1) num_threads(fmap_convert_threads_)
     {
 
-        if(use_model_shape_ && only_transpose) {
+        if(use_model_shape_) {
             unconvert_data(fmap_data);
-            this->transpose_hwdc_chwd(fmap_data, out_data);
+            apply_folded_ops(fmap_data, out_data);
         }
         else {
             unconvert_data(out_data);
@@ -842,15 +670,17 @@ MX_status FeatureMap::get_data(float* out_data) const
     return MX_STATUS_OK;
 }
 
-void FeatureMap::get_data_force_tpose(float* out_data, bool do_a_tpose) const
+void FeatureMap::get_data_force_foldedops(float* out_data, bool do_foldedops) const
 {
     #pragma omp parallel if(fmap_convert_threads_ > 1) num_threads(fmap_convert_threads_)
     {
-        if(do_a_tpose) {
+        if(do_foldedops)
+        {
             unconvert_data(fmap_data);
-            this->transpose_hwdc_chwd(fmap_data, out_data);
+            apply_folded_ops(fmap_data, out_data);
         }
-        else {
+        else
+        {
             unconvert_data(out_data);
         }
     }
@@ -865,34 +695,32 @@ MX_status FeatureMap::set_data(float* in_data) const
 
     #pragma omp parallel if(fmap_convert_threads_ > 1) num_threads(fmap_convert_threads_)
     {
-        if(use_model_shape_ && only_transpose) {
-            this->transpose_chwd_hwdc(in_data, fmap_data);
+        if(use_model_shape_) {
+            apply_folded_ops(in_data, fmap_data);
             convert_data(fmap_data);
         }
         else {
             convert_data(in_data);
         }
-        
+
     }
-    in_ready.store(false);
     return MX_STATUS_OK;
 }
 
 
-void FeatureMap::set_data_force_tpose(float* in_data, bool do_a_tpose) const
+void FeatureMap::set_data_force_foldedops(float* in_data, bool do_foldedops) const
 {
     #pragma omp parallel if(fmap_convert_threads_ > 1) num_threads(fmap_convert_threads_)
     {
-        if(do_a_tpose) {
-            this->transpose_chwd_hwdc(in_data, fmap_data);
+        if(do_foldedops)
+        {
+            apply_folded_ops(in_data, fmap_data);
             convert_data(fmap_data);
         }
-        else {
+        else
+        {
             convert_data(in_data);
         }
-    }
-    if(fm_type == FM_DFP) {
-        in_ready.store(false);
     }
 }
 
@@ -904,6 +732,15 @@ void FeatureMap::set_data_len(float* in_data, size_t data_len) const
     else {
         std::memcpy(fmap_data, in_data, data_len * sizeof(float));
     }
+}
+
+void FeatureMap::set_random_data() const
+{
+    for(size_t i = 0; i < featureMap_size; i++) {
+        float rand_val = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+        std::memcpy(fmap_data + i, &rand_val, sizeof(float));
+    }
+    convert_data(fmap_data);
 }
 
 void FeatureMap::get_data_len(float* out_data, size_t data_len) const
@@ -960,37 +797,18 @@ size_t FeatureMap::get_formatted_size()
     return formatted_featuremap_size;
 }
 
+//TODO: this needs to be changed..
 std::vector<int64_t> FeatureMap::shape() const
 {
     // TODO: see if this needs to be changed
     MX::Types::ShapeVector shape_vec(dim_h, dim_w, dim_z, dim_c);
-    if(use_model_shape_ && only_transpose) {
+    if(use_model_shape_) {
         return shape_vec.chfirst_shape();
     }
     else {
         return shape_vec.chlast_shape();
     }
 
-}
-
-void FeatureMap::set_in_ready(bool flag)
-{
-    in_ready.store(flag);
-}
-
-void FeatureMap::set_out_ready(bool flag)
-{
-    out_ready.store(flag);
-}
-
-bool FeatureMap::get_out_ready() const
-{
-    return out_ready.load();
-}
-
-bool FeatureMap::get_in_ready() const
-{
-    return in_ready.load();
 }
 
 int FeatureMap::get_num_fmap_threads() const

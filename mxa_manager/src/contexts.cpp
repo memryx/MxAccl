@@ -14,11 +14,10 @@
 
 #include "spdlog/spdlog.h"
 #ifdef _WIN32
-#include <spdlog/sinks/win_eventlog_sink.h>
+    #include <spdlog/sinks/win_eventlog_sink.h>
 #endif
 
 #include "contexts.h"
-#include "color_print.h"
 
 using namespace MX::Manager;
 using namespace MX::Utils;
@@ -29,7 +28,7 @@ using namespace MX::sha512;
 
 
 ContextClient::ContextClient(uint32_t id_, uint32_t obuffer_size_, uint32_t num_ofmaps_, uint64_t* ofmap_sizes,
-                             std::vector<uint8_t> allowed_driver_ctxs_, SharedLockedVar<bool> *alive_flag)
+                             std::vector<uint8_t> allowed_driver_ctxs_, SharedLockedVar<bool>* alive_flag)
 {
     id = id_;
 
@@ -60,13 +59,15 @@ ContextClient::ContextClient(uint32_t id_, uint32_t obuffer_size_, uint32_t num_
     pending_frame_cnt = 0;
 }
 
-void ContextClient::increment_pending_frames() {
+void ContextClient::increment_pending_frames()
+{
     std::unique_lock<std::mutex> lock(pending_frame_lock);
     pending_frame_cnt++;
     // spdlog::debug("[ContextClient] increment client {}. Current pending frame count: {}", id, pending_frame_cnt);
 }
 
-void ContextClient::decrement_pending_frames() {
+void ContextClient::decrement_pending_frames()
+{
     std::unique_lock<std::mutex> lock(pending_frame_lock);
     pending_frame_cnt--;
     // spdlog::debug("[ContextClient] decrement client {}. Current pending frame count: {}", id, pending_frame_cnt);
@@ -180,7 +181,8 @@ ModelContext::ModelContext(uint32_t ibuffer_size_, uint32_t obuffer_size_, uint3
 }
 
 
-std::vector<int> ModelContext::get_client_ids() {
+std::vector<int> ModelContext::get_client_ids()
+{
     std::lock_guard<std::mutex> lock(client_table_lock);
     std::vector<int> client_ids;
     for(auto it = clients.begin(); it != clients.end(); ++it) {
@@ -192,8 +194,9 @@ std::vector<int> ModelContext::get_client_ids() {
 ModelContext::~ModelContext()
 {
     // remove all clients, if any are in the client table
-    for(int id : this->get_client_ids())
+    for(int id : this->get_client_ids()) {
         remove_client(id);
+    }
 
     if(ifmap_buffers != nullptr) {
         for(uint32_t i = 0; i < ibuffer_size; i++) {
@@ -218,7 +221,7 @@ ModelContext::~ModelContext()
 }
 
 
-ContextClient* ModelContext::add_client(uint32_t id, SharedLockedVar<bool> *alive_flag)
+ContextClient* ModelContext::add_client(uint32_t id, SharedLockedVar<bool>* alive_flag)
 {
     if(id == 0 || id == 0xDEADBEEF || alive_flag == nullptr) {
         return nullptr;
@@ -232,7 +235,8 @@ ContextClient* ModelContext::add_client(uint32_t id, SharedLockedVar<bool> *aliv
     }
 }
 
-bool ModelContext::is_client_existed(ContextClient* client) {
+bool ModelContext::is_client_existed(ContextClient* client)
+{
     std::lock_guard<std::mutex> lock(client_table_lock);
     return clients_set.count(client) > 0;
 }
@@ -418,26 +422,26 @@ void DFPContext::parse_dfp(Dfp::DfpObject* d)
 
     spdlog::debug("  model_inports:");
     for (int i = 0; i < m->num_models; ++i) {
-        const auto& vec = m->model_inports[i];
+        const auto &vec = m->model_inports[i];
         // first print the .size() of the model_inports[i]
         spdlog::debug("    .size: {}", vec.size());
 
         std::ostringstream oss;
         for (size_t j = 0; j < vec.size(); ++j) {
             oss << vec[j];
-            if (j + 1 < vec.size()) oss << ' ';
+            if (j + 1 < vec.size()) { oss << ' '; }
         }
         spdlog::debug("    model {}: {}", i, oss.str());
     }
 
     spdlog::debug("  model_outports:");
     for (int i = 0; i < m->num_models; ++i) {
-        const auto& vec = m->model_outports[i];
+        const auto &vec = m->model_outports[i];
 
         std::ostringstream oss;
         for (size_t j = 0; j < vec.size(); ++j) {
             oss << vec[j];
-            if (j + 1 < vec.size()) oss << ' ';
+            if (j + 1 < vec.size()) { oss << ' '; }
         }
         spdlog::debug("    model {}: {}", i, oss.str());
     }
@@ -503,7 +507,7 @@ void DFPContext::parse_dfp(Dfp::DfpObject* d)
                 }
             }
             // TODO: else error
-            
+
 
             // print all the shape info for this port
             spdlog::debug("[DFPContext] Input port {}: format: {}, dim_h: {}, dim_w: {}, dim_z: {}, dim_c: {}, size: {}",
@@ -517,10 +521,12 @@ void DFPContext::parse_dfp(Dfp::DfpObject* d)
             Dfp::PortInfo* p = d->output_port(n->ostart_idx + j);
 
             uint32_t real_ch = 0;
-            if(p->hpoc_en != 0)
+            if(p->hpoc_en != 0) {
                 real_ch = p->hpoc_dim_c;
-            else
+            }
+            else {
                 real_ch = p->dim_c;
+            }
 
             if(p->format == MX_FMT_FP32) {
                 // just size * 4
@@ -577,16 +583,16 @@ void DFPContext::print_info()
 
     // print all the data in the port_info
     for (int i = 0; i < info->num_models; ++i) {
-        auto& p = info->port_info[i];
+        auto &p = info->port_info[i];
         spdlog::debug("    [Model {}] num_in={}, num_out={}, istart_idx={}, istop_idx={}, ostart_idx={}, ostop_idx={}",
-                     i, p->num_in, p->num_out,
-                     p->istart_idx, p->istop_idx,
-                     p->ostart_idx, p->ostop_idx);
+                      i, p->num_in, p->num_out,
+                      p->istart_idx, p->istop_idx,
+                      p->ostart_idx, p->ostop_idx);
         {
             std::ostringstream oss;
             for (uint8_t j = 0; j < p->num_in; ++j) {
                 oss << p->iport_sizes[j];
-                if (j + 1 < p->num_in) oss << ' ';
+                if (j + 1 < p->num_in) { oss << ' '; }
             }
             spdlog::debug("    iport_sizes: {}", oss.str());
         }
@@ -594,7 +600,7 @@ void DFPContext::print_info()
             std::ostringstream oss;
             for (uint8_t j = 0; j < p->num_out; ++j) {
                 oss << p->oport_sizes[j];
-                if (j + 1 < p->num_out) oss << ' ';
+                if (j + 1 < p->num_out) { oss << ' '; }
             }
             spdlog::debug("    oport_sizes: {}", oss.str());
         }

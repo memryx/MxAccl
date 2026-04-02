@@ -1,3 +1,27 @@
+mxa-manager (2.2.0-12) testing; urgency=medium
+
+    * SDK 2.2 test build
+
+ -- MemryX <no-reply@memryx.com>  Mon, 30 Mar 2026 00:00:00 -0500
+
+mxa-manager (2.1.2-1) stable; urgency=medium
+
+    * Handle potential invalid result for interface (PCIe/USB) detection
+
+ -- MemryX <no-reply@memryx.com>  Wed, 7 Jan 2026 00:00:00 -0500
+
+mxa-manager (2.1.1-1) stable; urgency=medium
+
+    * Support mixtures of hardware with/without power measurement support
+
+ -- MemryX <no-reply@memryx.com>  Wed, 3 Dec 2025 00:00:00 -0500
+
+mxa-manager (2.1.0-7) stable; urgency=medium
+
+    * SDK 2.1 stable release
+
+ -- MemryX <no-reply@memryx.com>  Fri, 31 Oct 2025 00:00:00 -0500
+
 mxa-manager (2.1.0-6) testing; urgency=medium
 
     * Bugfixes

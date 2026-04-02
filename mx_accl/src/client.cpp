@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -116,7 +116,7 @@ bool Client::init_connection(const std::string &server_address_, unsigned short 
 
         // Send the INIT_CONNECTION command
         MsgConnect msg_conn;
-        msg_conn.cmd = INIT_CONNECTION;
+        msg_conn.cmd = INIT_CONNECTION_PROTO_2;
         socket->write(mxasio::buffer(&msg_conn, sizeof(msg_conn)));
 
         // Read the response header
@@ -436,9 +436,13 @@ bool Client::connect_dfp(size_t num_dfp_bytes, uint8_t* dfp_bytes, int32_t model
         // Set the scheduler options
         msg_dfp.time_limit = sched_options.time_limit; // Time limit in milliseconds
         msg_dfp.frame_limit = sched_options.frame_limit; // Frame limit
-        msg_dfp.stop_on_empty = sched_options.stop_on_empty; // Stop on empty?
         msg_dfp.ifmap_queue_size = sched_options.ifmap_queue_size; // IFMAP queue size
         msg_dfp.ofmap_queue_size = sched_options.ofmap_queue_size; // OFMAP queue size
+        msg_dfp.autoclock_enabled = sched_options.autoclock_enabled; // Auto clocking enabled
+        msg_dfp.autoclock_power_limit_mw = sched_options.autoclock_power_limit_mw; // Clock power limit in mW
+        msg_dfp.autoclock_check_fps_saturation = sched_options.autoclock_check_fps_saturation; // Clock check FPS saturation
+        msg_dfp.autoclock_sample_interval_ms = sched_options.autoclock_sample_interval_ms; // Clock sample interval in ms
+        msg_dfp.autoclock_num_samples = sched_options.autoclock_num_samples; // UpClocking number of samples
 
         // Set the client options
         msg_dfp.smoothing = client_options.smoothing; // Smoothing option
@@ -457,9 +461,13 @@ bool Client::connect_dfp(size_t num_dfp_bytes, uint8_t* dfp_bytes, int32_t model
         socket->write(mxasio::buffer(&(msg_dfp.submodel_id), sizeof(msg_dfp.submodel_id)));
         socket->write(mxasio::buffer(&(msg_dfp.time_limit), sizeof(msg_dfp.time_limit)));
         socket->write(mxasio::buffer(&(msg_dfp.frame_limit), sizeof(msg_dfp.frame_limit)));
-        socket->write(mxasio::buffer(&(msg_dfp.stop_on_empty), 1));
         socket->write(mxasio::buffer(&(msg_dfp.ifmap_queue_size), sizeof(msg_dfp.ifmap_queue_size)));
         socket->write(mxasio::buffer(&(msg_dfp.ofmap_queue_size), sizeof(msg_dfp.ofmap_queue_size)));
+        socket->write(mxasio::buffer(&(msg_dfp.autoclock_enabled), 1));
+        socket->write(mxasio::buffer(&(msg_dfp.autoclock_power_limit_mw), sizeof(msg_dfp.autoclock_power_limit_mw)));
+        socket->write(mxasio::buffer(&(msg_dfp.autoclock_check_fps_saturation), 1));
+        socket->write(mxasio::buffer(&(msg_dfp.autoclock_sample_interval_ms), sizeof(msg_dfp.autoclock_sample_interval_ms)));
+        socket->write(mxasio::buffer(&(msg_dfp.autoclock_num_samples), sizeof(msg_dfp.autoclock_num_samples)));
         socket->write(mxasio::buffer(&(msg_dfp.smoothing), 1));
         socket->write(mxasio::buffer(&(msg_dfp.fps_target), sizeof(msg_dfp.fps_target)));
         socket->write(mxasio::buffer(&(msg_dfp.len_devices_to_use), sizeof(msg_dfp.len_devices_to_use)));
@@ -623,7 +631,7 @@ float Client::get_avg_max_temp(int32_t device_id)
 
     if (UNLIKELY(ctrl_socket == nullptr)) {
         spdlog::error("[Client] No ctrl_socket connection to get average temperature");
-        return -3000.0f;
+        return -1000.0f;
     }
 
     // Acquire the ctrl mutex
@@ -649,12 +657,12 @@ float Client::get_avg_max_temp(int32_t device_id)
     socket->write(mxasio::buffer(&header, sizeof(header)), error);
     if(UNLIKELY(error)) {
         spdlog::error("[Client] Error writing header: {}", error.message());
-        return -3000.0f;
+        return -1000.0f;
     }
     socket->write(mxasio::buffer(&msg_tpow, sizeof(msg_tpow)), error);
     if(UNLIKELY(error)) {
         spdlog::error("[Client] Error writing MsgGetTempPower: {}", error.message());
-        return -3000.0f;
+        return -1000.0f;
     }
 
     // Read the response header
@@ -666,11 +674,11 @@ float Client::get_avg_max_temp(int32_t device_id)
         rbytes = socket->read(mxasio::buffer(&status, sizeof(status)), error);
         if(UNLIKELY(rbytes == 0 || error)) {
             spdlog::error("[Client] Error reading status message: {}", error.message());
-            return -3000.0f;
+            return -1000.0f;
         }
 
         spdlog::error("[Client] Expected TEMP_POWER message, got a status message instead: {}", status2str(status.s));
-        return -3000.0f;
+        return -1000.0f;
     }
 
     // Read the MsgTempPower response
@@ -678,14 +686,14 @@ float Client::get_avg_max_temp(int32_t device_id)
     rbytes = socket->read(mxasio::buffer(&num_items, sizeof(uint32_t)), error);
     if(UNLIKELY(rbytes == 0 || error || num_items != 1)) {
         spdlog::error("[Client] Error reading temperature response: {}", error.message());
-        return -3000.0f;
+        return -1000.0f;
     }
 
-    float temp = -3000.0f;
+    float temp = -1000.0f;
     rbytes = socket->read(mxasio::buffer(&temp, sizeof(float)), error);
     if(UNLIKELY(rbytes == 0 || error)) {
         spdlog::error("[Client] Error reading temperature values: {}", error.message());
-        return -3000.0f;
+        return -1000.0f;
     }
 
     return temp;
@@ -696,7 +704,7 @@ float Client::get_inst_max_temp(int32_t device_id)
 
     if (UNLIKELY(ctrl_socket == nullptr)) {
         spdlog::error("[Client] No ctrl_socket connection to get average temperature");
-        return -3000.0f;
+        return -1000.0f;
     }
 
     // Acquire the ctrl mutex
@@ -722,12 +730,12 @@ float Client::get_inst_max_temp(int32_t device_id)
     socket->write(mxasio::buffer(&header, sizeof(header)), error);
     if(UNLIKELY(error)) {
         spdlog::error("[Client] Error writing header: {}", error.message());
-        return -3000.0f;
+        return -1000.0f;
     }
     socket->write(mxasio::buffer(&msg_tpow, sizeof(msg_tpow)), error);
     if(UNLIKELY(error)) {
         spdlog::error("[Client] Error writing MsgGetTempPower: {}", error.message());
-        return -3000.0f;
+        return -1000.0f;
     }
 
     // Read the response header
@@ -739,11 +747,11 @@ float Client::get_inst_max_temp(int32_t device_id)
         rbytes = socket->read(mxasio::buffer(&status, sizeof(status)), error);
         if(UNLIKELY(rbytes == 0 || error)) {
             spdlog::error("[Client] Error reading status message: {}", error.message());
-            return -3000.0f;
+            return -1000.0f;
         }
 
         spdlog::error("[Client] Expected TEMP_POWER message, got a status message instead: {}", status2str(status.s));
-        return -3000.0f;
+        return -1000.0f;
     }
 
     // Read the MsgTempPower response
@@ -751,14 +759,14 @@ float Client::get_inst_max_temp(int32_t device_id)
     rbytes = socket->read(mxasio::buffer(&num_items, sizeof(uint32_t)), error);
     if(UNLIKELY(rbytes == 0 || error || num_items != 1)) {
         spdlog::error("[Client] Error reading temperature response: {}", error.message());
-        return -3000.0f;
+        return -1000.0f;
     }
 
-    float temp = -3000.0f;
+    float temp = -1000.0f;
     rbytes = socket->read(mxasio::buffer(&temp, sizeof(float)), error);
     if(UNLIKELY(rbytes == 0 || error)) {
         spdlog::error("[Client] Error reading temperature values: {}", error.message());
-        return -3000.0f;
+        return -1000.0f;
     }
 
     return temp;
@@ -831,7 +839,7 @@ std::vector<float> Client::get_avg_temp_per_chip(int32_t device_id)
     temps.resize(num_items);
 
     for(uint32_t i = 0; i < num_items; i++) {
-        float temp = -3000.0f;
+        float temp = -1000.0f;
         rbytes = socket->read(mxasio::buffer(&temp, sizeof(float)), error);
         if(UNLIKELY(rbytes == 0 || error)) {
             spdlog::error("[Client] Error reading temperature values: {}", error.message());
@@ -911,7 +919,7 @@ std::vector<float> Client::get_inst_temp_per_chip(int32_t device_id)
     temps.resize(num_items);
 
     for(uint32_t i = 0; i < num_items; i++) {
-        float temp = -3000.0f;
+        float temp = -1000.0f;
         rbytes = socket->read(mxasio::buffer(&temp, sizeof(float)), error);
         if(UNLIKELY(rbytes == 0 || error)) {
             spdlog::error("[Client] Error reading temperature values: {}", error.message());
@@ -927,7 +935,7 @@ float Client::get_avg_power(int32_t device_id)
 {
     if (UNLIKELY(ctrl_socket == nullptr)) {
         spdlog::error("[Client] No ctrl_socket connection to get average temperature");
-        return -3000.0f;
+        return -1000.0f;
     }
 
     // Acquire the ctrl mutex
@@ -953,12 +961,12 @@ float Client::get_avg_power(int32_t device_id)
     socket->write(mxasio::buffer(&header, sizeof(header)), error);
     if(UNLIKELY(error)) {
         spdlog::error("[Client] Error writing header: {}", error.message());
-        return -3000.0f;
+        return -1000.0f;
     }
     socket->write(mxasio::buffer(&msg_tpow, sizeof(msg_tpow)), error);
     if(UNLIKELY(error)) {
         spdlog::error("[Client] Error writing MsgGetTempPower: {}", error.message());
-        return -3000.0f;
+        return -1000.0f;
     }
 
     // Read the response header
@@ -970,11 +978,16 @@ float Client::get_avg_power(int32_t device_id)
         rbytes = socket->read(mxasio::buffer(&status, sizeof(status)), error);
         if(UNLIKELY(rbytes == 0 || error)) {
             spdlog::error("[Client] Error reading status message: {}", error.message());
-            return -3000.0f;
+            return -1000.0f;
         }
 
-        spdlog::error("[Client] Expected TEMP_POWER message, got a status message instead: {}", status2str(status.s));
-        return -3000.0f;
+        if(LIKELY(status.s == INFO_DEVICE_DOESNT_DO_POWER)){
+            spdlog::debug("[Client] Device {} does not support power measurements.", device_id);
+            return -1000.0f;
+        } else {
+            spdlog::error("[Client] Expected TEMP_POWER message, got a status message instead: {}", status2str(status.s));
+            return -1000.0f;
+        }
     }
 
     // Read the MsgTempPower response
@@ -982,14 +995,14 @@ float Client::get_avg_power(int32_t device_id)
     rbytes = socket->read(mxasio::buffer(&num_items, sizeof(uint32_t)), error);
     if(UNLIKELY(rbytes == 0 || error || num_items != 1)) {
         spdlog::error("[Client] Error reading temperature response: {}", error.message());
-        return -3000.0f;
+        return -1000.0f;
     }
 
-    float power = -3000.0f;
+    float power = -1000.0f;
     rbytes = socket->read(mxasio::buffer(&power, sizeof(float)), error);
     if(UNLIKELY(rbytes == 0 || error)) {
         spdlog::error("[Client] Error reading temperature values: {}", error.message());
-        return -3000.0f;
+        return -1000.0f;
     }
 
     return power;
@@ -999,7 +1012,7 @@ float Client::get_inst_power(int32_t device_id)
 {
     if (UNLIKELY(ctrl_socket == nullptr)) {
         spdlog::error("[Client] No ctrl_socket connection to get average temperature");
-        return -3000.0f;
+        return -1000.0f;
     }
 
     // Acquire the ctrl mutex
@@ -1025,12 +1038,12 @@ float Client::get_inst_power(int32_t device_id)
     socket->write(mxasio::buffer(&header, sizeof(header)), error);
     if(UNLIKELY(error)) {
         spdlog::error("[Client] Error writing header: {}", error.message());
-        return -3000.0f;
+        return -1000.0f;
     }
     socket->write(mxasio::buffer(&msg_tpow, sizeof(msg_tpow)), error);
     if(UNLIKELY(error)) {
         spdlog::error("[Client] Error writing MsgGetTempPower: {}", error.message());
-        return -3000.0f;
+        return -1000.0f;
     }
 
     // Read the response header
@@ -1042,11 +1055,16 @@ float Client::get_inst_power(int32_t device_id)
         rbytes = socket->read(mxasio::buffer(&status, sizeof(status)), error);
         if(UNLIKELY(rbytes == 0 || error)) {
             spdlog::error("[Client] Error reading status message: {}", error.message());
-            return -3000.0f;
+            return -1000.0f;
         }
 
-        spdlog::error("[Client] Expected TEMP_POWER message, got a status message instead: {}", status2str(status.s));
-        return -3000.0f;
+        if(LIKELY(status.s == INFO_DEVICE_DOESNT_DO_POWER)){
+            spdlog::debug("[Client] Device {} does not support power measurements.", device_id);
+            return -1000.0f;
+        } else {
+            spdlog::error("[Client] Expected TEMP_POWER message, got a status message instead: {}", status2str(status.s));
+            return -1000.0f;
+        }
     }
 
     // Read the MsgTempPower response
@@ -1054,14 +1072,14 @@ float Client::get_inst_power(int32_t device_id)
     rbytes = socket->read(mxasio::buffer(&num_items, sizeof(uint32_t)), error);
     if(UNLIKELY(rbytes == 0 || error || num_items != 1)) {
         spdlog::error("[Client] Error reading temperature response: {}", error.message());
-        return -3000.0f;
+        return -1000.0f;
     }
 
-    float power = -3000.0f;
+    float power = -1000.0f;
     rbytes = socket->read(mxasio::buffer(&power, sizeof(float)), error);
     if(UNLIKELY(rbytes == 0 || error)) {
         spdlog::error("[Client] Error reading temperature values: {}", error.message());
-        return -3000.0f;
+        return -1000.0f;
     }
 
     return power;
@@ -1070,9 +1088,9 @@ float Client::get_inst_power(int32_t device_id)
 
 float Client::get_pressure(int32_t device_id)
 {
-if (UNLIKELY(ctrl_socket == nullptr)) {
+    if (UNLIKELY(ctrl_socket == nullptr)) {
         spdlog::error("[Client] No ctrl_socket connection to get_pressure from");
-        return 0.0f;
+        return -1000.0f;
     }
 
     // Acquire the ctrl mutex
@@ -1092,12 +1110,12 @@ if (UNLIKELY(ctrl_socket == nullptr)) {
     socket->write(mxasio::buffer(&header, sizeof(header)), error);
     if(UNLIKELY(error)) {
         spdlog::error("[Client] Error writing get_pressure header: {}", error.message());
-        return -3000.0f;
+        return -1000.0f;
     }
     socket->write(mxasio::buffer(&device_id, sizeof(int32_t)), error);
     if(UNLIKELY(error)) {
         spdlog::error("[Client] Error writing get_pressure device_id: {}", error.message());
-        return -3000.0f;
+        return -1000.0f;
     }
 
     // Read the response header
@@ -1109,12 +1127,12 @@ if (UNLIKELY(ctrl_socket == nullptr)) {
         rbytes = socket->read(mxasio::buffer(&status, sizeof(status)), error);
         if(UNLIKELY(rbytes == 0 || error)) {
             spdlog::error("[Client] Error reading status message: {}", error.message());
-            return -3000.0f;
+            return -1000.0f;
         }
 
         if(UNLIKELY(status.s != OK)) {
             spdlog::error("[Client] Expected OK status message, got: {}", status2str(status.s));
-            return -3000.0f;
+            return -1000.0f;
         }
 
         // utilization value is status.dat
@@ -1126,7 +1144,7 @@ if (UNLIKELY(ctrl_socket == nullptr)) {
     }
     else {
         spdlog::error("[Client] Expected STATUS message, got: {}", msgtype2str(header.msg_type));
-        return -3000.0f;
+        return -1000.0f;
     }
 }
 
@@ -1141,7 +1159,7 @@ bool Client::set_power_mode(int32_t device_id, uint16_t freq_mhz)
 
     if (UNLIKELY(ctrl_socket == nullptr)) {
         spdlog::error("[Client] No ctrl_socket connection to get_pressure from");
-        return 0.0f;
+        return false;
     }
 
     // Acquire the ctrl mutex

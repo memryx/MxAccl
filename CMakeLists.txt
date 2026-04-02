@@ -1,19 +1,14 @@
 cmake_minimum_required(VERSION 3.13)
 
-# don't use the default flags -- we know better
-set(CMAKE_C_FLAGS_DEBUG "" CACHE STRING "")
-set(CMAKE_CXX_FLAGS_DEBUG "" CACHE STRING "")
-set(CMAKE_C_FLAGS_RELEASE "" CACHE STRING "")
-set(CMAKE_CXX_FLAGS_RELEASE "" CACHE STRING "")
-
-project(MX_API LANGUAGES C CXX)
+project(MxAccl)
 
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
 set(CMAKE_CXX_STANDARD 17)
 
-
 option(NO_AVX "Disable AVX/AVX2 options for x86 builds" OFF)
+option(BUILD_TOOLS "Build the acclBench executable" ON)
+option(DISABLE_SAN "Only useful when BUILD_TYPE is 'Debug'. Disable sanitizer such as AddressSanitizer (ASan), LeakSanitizer (LSan), ... " OFF)
 
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -45,19 +40,22 @@ endif()
 
 
 if(CMAKE_BUILD_TYPE MATCHES "Debug")
-#if(CMAKE_BUILD_TYPE MATCHES "Packaging")
-  set(
-    CMAKE_C_FLAGS
-    #"${CMAKE_C_FLAGS} -Wall -Wextra -fPIC -march=native -Og -g -fopenmp -fno-omit-frame-pointer -fsanitize=address -fsanitize=leak -fsanitize=null -fsanitize=bounds -fsanitize=bounds-strict -fsanitize=pointer-overflow -Wno-unused-variable"
-    "${CMAKE_C_FLAGS} -Wall -Wextra -fPIC -march=native -Og -g -fopenmp -fno-omit-frame-pointer -fsanitize=thread -Wno-error=tsan -Wno-unused-variable"
-    #"${CMAKE_C_FLAGS} -Wall -Wextra -fPIC -O0 -g -fopenmp -fno-omit-frame-pointer -Wno-unused-variable"
-  )
-  set(
-    CMAKE_CXX_FLAGS
-    #"${CMAKE_CXX_FLAGS} -Wall -Wextra -fPIC -march=native -Og -g -fopenmp -fno-omit-frame-pointer -fsanitize=address -fsanitize=leak -fsanitize=null -fsanitize=bounds -fsanitize=bounds-strict -fsanitize=pointer-overflow -Wno-unused-variable"
-    "${CMAKE_CXX_FLAGS} -Wall -Wextra -fPIC -march=native -Og -g -fopenmp -fno-omit-frame-pointer -fsanitize=thread -Wno-error=tsan -Wno-unused-variable"
-    #"${CMAKE_CXX_FLAGS} -Wall -Wextra -fPIC -O0 -g -fopenmp -fno-omit-frame-pointer -Wno-unused-variable"
-  )
+
+  # Basic debug and common compilation flags
+  set(BASIC_DEBUG_FLAGS "-Wall -Wextra -fPIC -O0 -g -fopenmp -fno-omit-frame-pointer -Wno-unused-variable")
+
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${BASIC_DEBUG_FLAGS}")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${BASIC_DEBUG_FLAGS}")
+
+  if(NOT DISABLE_SAN)
+      # Sanitizer flags (only applied if enabled)
+      set(SAN_FLAGS "-fsanitize=address -fsanitize=leak -fsanitize=null -fsanitize=bounds -fsanitize=bounds-strict -fsanitize=pointer-overflow")
+
+      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${SAN_FLAGS}")
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SAN_FLAGS}")
+  endif()
+
+
 else()
   if (CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)|(x86_64)|(X86_64)")
     set(
@@ -107,7 +105,9 @@ set(MXACCL_DYNAMIC "mx_accl")
 SUBDIRLIST(SUBDIRS ${CMAKE_CURRENT_SOURCE_DIR} "*")
 
 FOREACH(subdir ${SUBDIRS})
-  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${subdir}/CMakeLists.txt)
+  if(${subdir} STREQUAL "tools" AND NOT BUILD_TOOLS)
+    message(STATUS "Excluding 'tools' directory from build due to BUILD_TOOLS=OFF.")
+  elseif(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${subdir}/CMakeLists.txt)
     ADD_SUBDIRECTORY(${subdir})
   endif()
 ENDFOREACH()

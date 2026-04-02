@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -54,17 +54,17 @@ class MxAcclBase
      * @param device_ids_to_use IDs of MXA devices this object will use. Set to {-1} to mean "all".
      * @param use_model_shape Set of {input, output} bools to indicate whether to exactly match original model shape, or the shape used by the MXA.
      * @param local_mode If true, the DFP will be run in Local mode, which may be faster for some applications but doesn't support simultaneous use.
-     * @param sched_options Scheduler options for the DFP. Default is {frame_limit = 20, timeout = 250, swap_on_empty = false, input_queue_size = 16, output_queue_size = 21}.
+     * @param sched_options Scheduler options for the DFP. Default is {frame_limit = 20, timeout = 250, input_queue_size = 16, output_queue_size = 21}.
      * @param client_options Client options for the DFP. Default is {smooth_fps = false, smooth_fps_target = 0}.
      * @param server_addr Socket file path or IP address of the server. Default is "/run/mxa_manager/" (socketfile, Linux) or "localhost" (IP, Windows).
      * @param server_port_base Base port number for the server. Default is 10000. Applies to both socket filenames and IP addresses.
      * @param ignore_server_ (ADVANCED) If true, the server connection is ignored and the DFP is run in Local mode, without consideration for other processes on the system. Will lead to crashes if multiple objects / processes / containers try to use the same device.
     */
-    MxAcclBase(const std::filesystem::path& dfp_path,
+    MEMX_API_EXPORT MxAcclBase(const std::filesystem::path &dfp_path,
                std::vector<int> device_ids_to_use = {0},
                std::array<bool, 2> use_model_shape = {true, true},
                bool local_mode = false,
-               SchedulerOptions sched_options = {20, 250, false, 16, 21},
+               SchedulerOptions sched_options = {20, 250, 16, 21, false, 11500, false, 50, 6},
                ClientOptions client_options = {false, 0},
                std::string server_addr = "/run/mxa_manager/",
                unsigned int server_port_base = 10000,
@@ -77,18 +77,18 @@ class MxAcclBase
      * @param device_ids_to_use IDs of MXA devices this object will use. Set to {-1} to mean "all".
      * @param use_model_shape Set of {input, output} bools to indicate whether to exactly match original model shape, or the shape used by the MXA.
      * @param local_mode If true, the DFP will be run in Local mode, which may be faster for some applications but doesn't support simultaneous use.
-     * @param sched_options Scheduler options for the DFP. Default is {frame_limit = 20, timeout = 250, swap_on_empty = false, input_queue_size = 16, output_queue_size = 21}.
+     * @param sched_options Scheduler options for the DFP. Default is {frame_limit = 20, timeout = 250, input_queue_size = 16, output_queue_size = 21}.
      * @param client_options Client options for the DFP. Default is {smooth_fps = false, smooth_fps_target = 0}.
      * @param server_addr Socket file path or IP address of the server. Default is "/run/mxa_manager/" (socketfile, Linux) or "localhost" (IP, Windows).
      * @param server_port_base Base port number for the server. Default is 10000. Applies to both socket filenames and IP addresses.
      * @param ignore_server_ (ADVANCED) If true, the server connection is ignored and the DFP is run in Local mode, without consideration for other processes on the system. Will lead to crashes if multiple objects / processes / containers try to use the same device.
     */
-    MxAcclBase(uint8_t* dfp_bytes,
+    MEMX_API_EXPORT MxAcclBase(uint8_t* dfp_bytes,
                size_t dfp_byte_size,
                std::vector<int> device_ids_to_use = {0},
                std::array<bool, 2> use_model_shape = {true, true},
                bool local_mode = false,
-               SchedulerOptions sched_options = {20, 250, false, 16, 21},
+               SchedulerOptions sched_options = {20, 250, 16, 21, false, 11500, false, 50, 6},
                ClientOptions client_options = {false, 0},
                std::string server_addr = "/run/mxa_manager/",
                unsigned int server_port_base = 10000,
@@ -102,13 +102,6 @@ class MxAcclBase
      * @param ignore_server_ (ADVANCED) If true, the server connection is ignored and the DFP is run in Local mode, without consideration for other processes on the system. Will lead to crashes if multiple objects / processes / containers try to use the same device.
     */
     MxAcclBase(std::string server_addr, unsigned int server_port_base, bool ignore_server_ = false);
-
-    /**
-     * @brief Remove a DFP and delete all its streams
-     *
-     * @return true if the DFP was removed successfully, false otherwise
-     */
-    MEMX_API_EXPORT bool remove_dfp();
 
     // cleans up any DFPs and models that are still open
     ~MxAcclBase();
@@ -191,10 +184,13 @@ class MxAcclBase
        * @return The current power consumption value (in milliwatts) of the device.
      */
     MEMX_API_EXPORT float get_power(int device_id = 0);
-    
+
     /**
        * @brief Retrieves the current Pressure ("Throughput Utilization") of the specified device.
-       * @note Pressure represents how full the MXA's pipeline is. For example, a pressure of "LOW" means the device is mostly idle, while "FULL" means the device is fully occupied.
+       * @note Pressure represents how "full" the MXA's pipeline is.  
+       * This does NOT represent things like Core utilization or % of maximum FPS.
+       * 
+       * @see See value descriptions here: MX::Types::Pressure
        *
        * @return The current Pressure value of the device.
      */
@@ -233,6 +229,15 @@ class MxAcclBase
      */
     MEMX_API_EXPORT bool is_ready();
 
+    /**
+       * @brief Returns the list of converted device IDs that this MxAccl object is using.
+       *
+       * @return A vector of integers representing the device IDs in use (after conversion).
+     */
+    MEMX_API_EXPORT std::vector<int> get_converted_device_ids_to_use() const;
+
+    MxModel* get_model(int model_id) const;
+
   protected:
     /**
      * @brief Connect a dfp to MxAccl object. Currently only one connect_dfp per MxAccl object is allowed.
@@ -240,7 +245,7 @@ class MxAcclBase
      * @param file_path Absolute path of DFP file. char* and String types can also be passed.
      * @param device_ids_to_use IDs of MXA devices this process intends to use. takes in a vector of IDs and will return an error if an empty vector is passed
      * @param local_mode If true, the DFP will be run in local mode. Default is true.
-     * @param options Scheduler options for the DFP. Default is {frame_limit = 20, timeout = 250, swap_on_empty = false, input_queue_size = 16, output_queue_size = 21}.
+     * @param options Scheduler options for the DFP. Default is {frame_limit = 20, timeout = 250, input_queue_size = 16, output_queue_size = 21}.
      * @param ClientOptions Client options for the DFP. Default is {false, 0}.
      *
      * @return dfp_id which is later to be passed in connect_stream function to specify that specific stream to a dfp
@@ -248,7 +253,8 @@ class MxAcclBase
     MEMX_API_EXPORT int connect_dfp(const std::filesystem::path dfp_path, std::vector<int> device_ids_to_use = {0},
                                     std::array<bool, 2> use_model_shape = {true, true},
                                     bool local_mode = false,
-                                    SchedulerOptions sched_options = {20, 250, false, 16, 21}, ClientOptions client_options = {false, 0});
+                                    SchedulerOptions sched_options = {20, 250, 16, 21, false, 11500, false, 50, 6},
+                                    ClientOptions client_options = {false, 0});
 
     /**
      * @brief Connect a dfp as bytes to MxAccl object. Currently only one connect_dfp per MxAccl object is allowed.
@@ -257,25 +263,27 @@ class MxAcclBase
      * @param dfp_byte_size Size of DFP data in bytes
      * @param device_ids_to_use IDs of MXA devices this process intends to use. takes in a vector of IDs and will return an error if an empty vector is passed
      * @param local_mode If true, the DFP will be run in local mode. Default is true.
-     * @param options Scheduler options for the DFP. Default is {frame_limit = 20, timeout = 250, swap_on_empty = false, input_queue_size = 16, output_queue_size = 21}.
+     * @param options Scheduler options for the DFP. Default is {frame_limit = 20, timeout = 250, input_queue_size = 16, output_queue_size = 21}.
      *
      * @return dfp_id which is later to be passed in connect_stream function to specify that specific stream to a dfp
      */
     MEMX_API_EXPORT int connect_dfp(uint8_t* dfp_bytes, size_t dfp_byte_size, std::vector<int> device_ids_to_use = {0},
                                     std::array<bool, 2> use_model_shape = {true, true},
                                     bool local_mode = false,
-                                    SchedulerOptions sched_options = {20, 250, false, 16, 21}, ClientOptions client_options = {false, 0});
+                                    SchedulerOptions sched_options = {20, 250, 16, 21, false, 11500, false, 50, 6},
+                                    ClientOptions client_options = {false, 0});
 
+    // gets model or throws runtime error if not found
+    MxModel* get_model_or_throw(int model_id, const std::string &class_name, const std::string &func_name) const;
 
     // device manager for locally-managed devices
     MX::Runtime::DeviceManager*  device_manager;
 
-    // map of dfp_id to DFPRunner
-    mutable std::shared_mutex   runner_mutex;
-    std::map<int, DFPRunner*>   runner_table;
+    // map of device to dfp_id
     std::map<int, int>          device_to_dfp_id_map;
 
     // DFP ID generator/tracker
+    DFPRunner* dfp_runner = nullptr;
     DfpIDTracker dfp_id_tracker;
 
     // server connection info
@@ -288,7 +296,7 @@ class MxAcclBase
     // poll and update an average pressure value for each
     // device. then get_pressure will just return the average
     void pressure_thread_func(std::vector<int> device_ids);
-    std::thread *pressure_thread;
+    std::thread* pressure_thread = nullptr;
     std::vector<std::deque<float>> pressure_history;
     std::vector<float> pressure_avgs;
     std::atomic_bool pressure_thread_running;

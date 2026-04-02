@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -19,6 +19,30 @@ using namespace MX::Utils;
 using namespace MX::RPC;
 using namespace std;
 
+static constexpr const char* CLASS_NAME = "MxAcclBase";
+
+MxModel* MxAcclBase::get_model(int model_id) const
+{
+    MxModel* model = dfp_runner->get_model(model_id);
+    if (!model) {
+        std::string msg = fmt::format("model_id {} is not found", model_id);
+        spdlog::error(msg);
+        throw std::runtime_error(msg);
+    }
+    return model;
+}
+
+MxModel* MxAcclBase::get_model_or_throw(int model_id, const std::string &class_name, const std::string &func_name) const
+{
+    MxModel* model = dfp_runner->get_model(model_id);
+    if (!model) {
+        std::string msg = fmt::format("[{}] Error in {}: model_id {} is not found", class_name, func_name, model_id);
+        spdlog::error(msg);
+        throw std::runtime_error(msg);
+    }
+    return model;
+}
+
 // basic constructor -- for calling connect_dfp later
 MxAcclBase::MxAcclBase(std::string server_addr, unsigned int server_port_base, bool ignore_server)
 {
@@ -33,7 +57,7 @@ MxAcclBase::MxAcclBase(std::string server_addr, unsigned int server_port_base, b
 }
 
 // AIO constructor using file path
-MxAcclBase::MxAcclBase(const std::filesystem::path& dfp_path, std::vector<int> device_ids_to_use,
+MxAcclBase::MxAcclBase(const std::filesystem::path &dfp_path, std::vector<int> device_ids_to_use,
                        std::array<bool, 2> use_model_shape, bool local_mode,
                        SchedulerOptions sched_options, ClientOptions client_options,
                        std::string server_addr, unsigned int server_port_base, bool ignore_server)
@@ -47,14 +71,14 @@ MxAcclBase::MxAcclBase(const std::filesystem::path& dfp_path, std::vector<int> d
         throw std::runtime_error(err_msg);
     }
 
-    if(local_mode){
+    if(local_mode) {
         // init pressure history
         pressure_thread_running.store(true, std::memory_order_relaxed);
         pressure_history.resize(device_manager->all_devices_count);
         pressure_avgs.resize(device_manager->all_devices_count, 0.0f);
         pressure_thread = new std::thread(&MxAcclBase::pressure_thread_func, this, device_ids_to_use);
-        pressure_thread->detach();
-    } else {
+    }
+    else {
         pressure_thread = nullptr;
         pressure_thread_running.store(false, std::memory_order_relaxed);
     }
@@ -67,7 +91,7 @@ MxAcclBase::MxAcclBase(uint8_t* dfp_bytes, size_t dfp_byte_size, std::vector<int
                        SchedulerOptions sched_options, ClientOptions client_options,
                        std::string server_addr, unsigned int server_port_base, bool ignore_server)
     : MxAcclBase(server_addr, server_port_base, ignore_server)
-{
+{   
     // connect the dfp
     int dfp_id = connect_dfp(dfp_bytes, dfp_byte_size, device_ids_to_use, use_model_shape, local_mode, sched_options, client_options);
     if(dfp_id < 0) {
@@ -75,15 +99,15 @@ MxAcclBase::MxAcclBase(uint8_t* dfp_bytes, size_t dfp_byte_size, std::vector<int
         spdlog::error(err_msg);
         throw std::runtime_error(err_msg);
     }
-    
-    if(local_mode){
+
+    if(local_mode) {
         // init pressure history
         pressure_thread_running.store(true, std::memory_order_relaxed);
         pressure_history.resize(device_manager->all_devices_count);
         pressure_avgs.resize(device_manager->all_devices_count, 0.0f);
         pressure_thread = new std::thread(&MxAcclBase::pressure_thread_func, this, device_ids_to_use);
-        pressure_thread->detach();
-    } else {
+    }
+    else {
         pressure_thread = nullptr;
         pressure_thread_running.store(false, std::memory_order_relaxed);
     }
@@ -94,12 +118,12 @@ MxAcclBase::~MxAcclBase()
     // stop pressure thread if local mode
     if(pressure_thread != nullptr) {
         pressure_thread_running.store(false, std::memory_order_relaxed);
+        pressure_thread->join();
         delete pressure_thread;
         pressure_thread = nullptr;
     }
-    // close all dfp_runners
-    for(auto it = runner_table.begin(); it != runner_table.end(); it++) {
-        DFPRunner* dfp_runner = it->second;
+    // close dfp runner
+    if (dfp_runner != nullptr) {
         if(dfp_runner->is_local()) {
             dfp_runner->close_local();
         }
@@ -107,8 +131,8 @@ MxAcclBase::~MxAcclBase()
             dfp_runner->close_shared();
         }
         delete dfp_runner;
+        dfp_runner = nullptr;
     }
-    runner_table.clear();
     device_to_dfp_id_map.clear();
     delete device_manager;
 }
@@ -120,7 +144,7 @@ bool MxAcclBase::is_ready()
         return device_manager->all_devices_count > 0;
     }
     else {
-        return !runner_table.empty();
+        return dfp_runner != nullptr;
     }
 }
 
@@ -128,7 +152,8 @@ bool MxAcclBase::is_ready()
 // LOCAL MODE PRESSURE MONITOR
 //==============================================================================================
 
-void MxAcclBase::pressure_thread_func(std::vector<int> device_ids){
+void MxAcclBase::pressure_thread_func(std::vector<int> device_ids)
+{
     // this thread periodically polls each device in device_ids
     // and updates an average pressure value for each device
     // the get_pressure function just returns the average
@@ -142,7 +167,7 @@ void MxAcclBase::pressure_thread_func(std::vector<int> device_ids){
             if(p < 0.0f || p > 100.0f) {
                 continue;
             }
-            auto& history = pressure_history[device_id];
+            auto &history = pressure_history[device_id];
             history.push_back(p);
             if(history.size() > pressure_history_len) {
                 history.pop_front();
@@ -156,7 +181,7 @@ void MxAcclBase::pressure_thread_func(std::vector<int> device_ids){
             }
             pressure_avgs[device_id] = sum / static_cast<float>(history.size());
         }
-        
+
         std::this_thread::sleep_for(std::chrono::milliseconds(pressure_poll_interval_ms));
     }
 }
@@ -167,7 +192,7 @@ void MxAcclBase::pressure_thread_func(std::vector<int> device_ids){
 //==============================================================================================
 
 // multi-device from bytes
-int MxAcclBase::connect_dfp(uint8_t* dfp_bytes, size_t dfp_byte_size, 
+int MxAcclBase::connect_dfp(uint8_t* dfp_bytes, size_t dfp_byte_size,
                             std::vector<int> device_ids_to_use,
                             std::array<bool, 2> use_model_shape,
                             bool local_mode,
@@ -193,43 +218,38 @@ int MxAcclBase::connect_dfp(uint8_t* dfp_bytes, size_t dfp_byte_size,
     Dfp::DfpObject* dfp = new Dfp::DfpObject(dfp_bytes, dfp_byte_size);
 
     // create the runner
-    DFPRunner* dfp_runner = new DFPRunner(dfp_id, dfp, server_addr_, server_port_base_, local_mode, device_ids_to_use,
-                                          use_model_shape, sched_options, client_options, device_manager, ignore_server_);
-
+    dfp_runner = new DFPRunner(dfp_id, dfp, server_addr_, server_port_base_, local_mode,
+                               device_ids_to_use, use_model_shape, sched_options,
+                               client_options, device_manager, ignore_server_);
+    
     // if local mode, set dfp_runner->init_local() and record lock successes/fails
     if(local_mode) {
         if(dfp_runner->init_local() == false) {
             spdlog::error("[MxAcclBase] Error in connect_dfp: dfp_runner->init_local() failed");
             delete dfp_runner;
+            dfp_runner = nullptr;
             dfp_id_tracker.retire(dfp_id);
             return -1;
         }
         else {
-            // add the runner to the table and local devices in use list
-            std::unique_lock<std::shared_mutex> lock(runner_mutex);
-            runner_table[dfp_id] = dfp_runner;
-            for(auto device_id : device_ids_to_use) {
+            for(auto device_id : dfp_runner->get_converted_device_ids_to_use()) {
                 device_manager->local_device_in_use[device_id] = true;
                 device_to_dfp_id_map[device_id] = dfp_id;
             }
-            lock.unlock();
         }
     }
     else {
         if(dfp_runner->init_shared() == false) {
             spdlog::error("[MxAcclBase] Error in connect_dfp: dfp_runner->init_shared() failed");
             delete dfp_runner;
+            dfp_runner = nullptr;
             dfp_id_tracker.retire(dfp_id);
             return -1;
         }
         else {
-            // add the runner to the table
-            std::unique_lock<std::shared_mutex> lock(runner_mutex);
-            runner_table[dfp_id] = dfp_runner;
-            for(auto device_id : device_ids_to_use) {
+            for(auto device_id : dfp_runner->get_converted_device_ids_to_use()) {
                 device_to_dfp_id_map[device_id] = dfp_id;
             }
-            lock.unlock();
         }
     }
 
@@ -263,43 +283,40 @@ int MxAcclBase::connect_dfp(const std::filesystem::path dfp_path, std::vector<in
     Dfp::DfpObject* dfp = new Dfp::DfpObject(dfp_path.string());
 
     // create the runner
-    DFPRunner* dfp_runner = new DFPRunner(dfp_id, dfp, server_addr_, server_port_base_, local_mode, device_ids_to_use,
-                                          use_model_shape, sched_options, client_options, device_manager, ignore_server_);
+    dfp_runner = new DFPRunner(dfp_id, dfp, server_addr_, server_port_base_, local_mode,
+                               device_ids_to_use, use_model_shape, sched_options,
+                               client_options, device_manager, ignore_server_);
 
     // if local mode, set dfp_runner->init_local() and record lock successes/fails
     if(local_mode) {
         if(dfp_runner->init_local() == false) {
             spdlog::error("[MxAcclBase] Error in connect_dfp: dfp_runner->init_local() failed");
             delete dfp_runner;
+            dfp_runner = nullptr;
             dfp_id_tracker.retire(dfp_id);
             return -1;
         }
         else {
-            // add the runner to the table and local devices in use list
-            std::unique_lock<std::shared_mutex> lock(runner_mutex);
-            runner_table[dfp_id] = dfp_runner;
+            // add the runner to local devices in use list
             for(auto device_id : device_ids_to_use) {
                 device_manager->local_device_in_use[device_id] = true;
                 device_to_dfp_id_map[device_id] = dfp_id;
             }
-            lock.unlock();
         }
     }
     else {
         if(dfp_runner->init_shared() == false) {
             spdlog::error("[MxAcclBase] Error in connect_dfp: dfp_runner->init_shared() failed");
             delete dfp_runner;
+            dfp_runner = nullptr;
             dfp_id_tracker.retire(dfp_id);
             return -1;
         }
         else {
-            // add the runner to the table
-            std::unique_lock<std::shared_mutex> lock(runner_mutex);
-            runner_table[dfp_id] = dfp_runner;
+            // add the runner to local devices in use list
             for(auto device_id : device_ids_to_use) {
                 device_to_dfp_id_map[device_id] = dfp_id;
             }
-            lock.unlock();
         }
     }
 
@@ -310,176 +327,37 @@ int MxAcclBase::connect_dfp(const std::filesystem::path dfp_path, std::vector<in
 
 
 //==============================================================================================
-// REMOVE DFP
-//==============================================================================================
-
-bool MxAcclBase::remove_dfp()
-{
-    int dfp_id = 0; // TODO: temp solution
-    std::unique_lock<std::shared_mutex> lock(runner_mutex);
-    auto it = runner_table.find(dfp_id);
-    if(it == runner_table.end()) {
-        spdlog::error("[MxAcclBase] Error in remove_dfp: dfp_id {} not found", dfp_id);
-        lock.unlock();
-        return false;
-    }
-
-    // get the dfp_runner
-    DFPRunner* dfp_runner = it->second;
-
-    // used to track the device ids that we need to search for
-    // potential new owners in the device_to_dfp_id_map
-    std::deque<int> device_ids_to_redo;
-
-    // close the dfp_runner
-    if(dfp_runner->is_local()) {
-        if(dfp_runner->close_local() == false) {
-            spdlog::error("[MxAcclBase] Error in remove_dfp: dfp_runner->close_local() failed");
-            lock.unlock();
-            return false;
-        }
-        else {
-            // remove the local devices from the in use list
-            for(auto device_id : dfp_runner->device_ids_to_use_) {
-                device_manager->local_device_in_use[device_id] = false;
-                device_to_dfp_id_map.erase(device_id);
-                device_ids_to_redo.push_back(device_id);
-            }
-        }
-    }
-    else {
-        if(dfp_runner->close_shared() == false) {
-            spdlog::error("[MxAcclBase] Error in remove_dfp: dfp_runner->close_shared() failed");
-            lock.unlock();
-            return false;
-        }
-
-        // remove the device ids from the device_to_dfp_id_map
-        for(auto device_id : dfp_runner->device_ids_to_use_) {
-            auto it_device = device_to_dfp_id_map.find(device_id);
-            if(it_device != device_to_dfp_id_map.end()) {
-                device_to_dfp_id_map.erase(it_device);
-                device_ids_to_redo.push_back(device_id);
-            }
-            else {
-                spdlog::warn("[MxAcclBase] Warning in remove_dfp: device_id {} not found in device_to_dfp_id_map", device_id);
-            }
-        }
-    }
-
-    // delete the dfp_runner
-    delete dfp_runner;
-
-    // remove the dfp_runner from the table
-    runner_table.erase(it);
-
-    // retire the dfp_id from the tracker
-    dfp_id_tracker.retire(dfp_id);
-
-
-    // for each device_id in device_ids_to_redo, go through the runner_table
-    // and see if any other dfp_runner is using that device_id.
-    //
-    // if so, update the device_to_dfp_id_map to point to that dfp_id
-    for(auto device_id : device_ids_to_redo) {
-        for(auto &runner_pair : runner_table) {
-            DFPRunner* runner = runner_pair.second;
-            if(std::find(runner->device_ids_to_use_.begin(), runner->device_ids_to_use_.end(), device_id) !=
-                    runner->device_ids_to_use_.end()) {
-                // found a dfp_runner that is using this device_id
-                device_to_dfp_id_map[device_id] = runner_pair.first; // update the map to point to this dfp_id
-                break;
-            }
-        }
-    }
-
-    lock.unlock();
-    return true;
-}
-
-
-//==============================================================================================
 // MISC "GET" FUNCTIONS
 //==============================================================================================
 
 int MxAcclBase::get_num_models()
 {
-    int dfp_id = 0; // TODO: temp solution
-
-    std::shared_lock lock(runner_mutex);
-    auto it = runner_table.find(dfp_id);
-    if(it == runner_table.end()) {
-        spdlog::error("[MxAcclBase] Error in get_num_models: dfp_id {} not found", dfp_id);
-        lock.unlock();
-        return -1;
-    }
-    DFPRunner* dfp_runner = it->second;
-    lock.unlock();
     return dfp_runner->num_models;
 }
 
 int MxAcclBase::get_dfp_num_chips()
 {
-    int dfp_id = 0; // TODO: temp solution
-
-    std::shared_lock lock(runner_mutex);
-    auto it = runner_table.find(dfp_id);
-    if(it == runner_table.end()) {
-        spdlog::error("[MxAcclBase] Error in get_dfp_num_chips: dfp_id {} not found", dfp_id);
-        lock.unlock();
-        return -1;
-    }
-    DFPRunner* dfp_runner = it->second;
-    lock.unlock();
     return dfp_runner->dfp_->get_dfp_meta()->num_chips;
+}
+
+std::vector<int> MxAcclBase::get_converted_device_ids_to_use() const 
+{
+    return dfp_runner->get_converted_device_ids_to_use();
 }
 
 MxModelInfo MxAcclBase::get_model_info(int model_id) const
 {
-    int dfp_id = 0; // TODO: temp solution
-
-    std::shared_lock lock(runner_mutex);
-    auto it = runner_table.find(dfp_id);
-    if(it == runner_table.end()) {
-        spdlog::error("[MxAcclBase] Error in get_model_info: dfp_id {} not found", dfp_id);
-        lock.unlock();
-        throw std::runtime_error("MxAcclBase: Error in get_model_info: dfp_id not found");
-    }
-    DFPRunner* dfp_runner = it->second;
-    lock.unlock();
-    return dfp_runner->models[model_id]->return_model_info();
+    return get_model_or_throw(model_id, CLASS_NAME, __func__)->get_model_info();
 }
 
 MxModelInfo MxAcclBase::get_pre_model_info(int model_id) const
 {
-    int dfp_id = 0; // TODO: temp solution
-
-    std::shared_lock lock(runner_mutex);
-    auto it = runner_table.find(dfp_id);
-    if(it == runner_table.end()) {
-        spdlog::error("[MxAcclBase] Error in get_pre_model_info: dfp_id {} not found", dfp_id);
-        lock.unlock();
-        throw std::runtime_error("MxAcclBase: Error in get_pre_model_info: dfp_id not found");
-    }
-    DFPRunner* dfp_runner = it->second;
-    lock.unlock();
-    return dfp_runner->models[model_id]->return_pre_model_info();
+    return get_model_or_throw(model_id, CLASS_NAME, __func__)->get_pre_model_info();
 }
 
 MxModelInfo MxAcclBase::get_post_model_info(int model_id) const
 {
-    int dfp_id = 0; // TODO: temp solution
-
-    std::shared_lock lock(runner_mutex);
-    auto it = runner_table.find(dfp_id);
-    if(it == runner_table.end()) {
-        spdlog::error("[MxAcclBase] Error in get_post_model_info: dfp_id {} not found", dfp_id);
-        lock.unlock();
-        throw std::runtime_error("MxAcclBase: Error in get_post_model_info: dfp_id not found");
-    }
-    DFPRunner* dfp_runner = it->second;
-    lock.unlock();
-    return dfp_runner->models[model_id]->return_post_model_info();
+    return get_model_or_throw(model_id, CLASS_NAME, __func__)->get_post_model_info();
 }
 
 //==============================================================================================
@@ -489,50 +367,17 @@ MxModelInfo MxAcclBase::get_post_model_info(int model_id) const
 void MxAcclBase::connect_post_model(std::filesystem::path post_model_path, int model_id,
                                     const std::vector<size_t> &post_size_list)
 {
-    int dfp_id = 0; // TODO: temp solution
-
-    std::shared_lock lock(runner_mutex);
-    auto it = runner_table.find(dfp_id);
-    if(it == runner_table.end()) {
-        spdlog::error("[MxAcclBase] Error in connect_post_model: dfp_id {} not found", dfp_id);
-        lock.unlock();
-        throw std::runtime_error("MxAcclBase: Error in connect_post_model: dfp_id not found");
-    }
-    DFPRunner* dfp_runner = it->second;
-    dfp_runner->models[model_id]->model_set_post(post_model_path, post_size_list);
-    lock.unlock();
+    return get_model_or_throw(model_id, CLASS_NAME, __func__)->model_set_post(post_model_path, post_size_list);
 }
 
 void MxAcclBase::connect_pre_model(std::filesystem::path pre_model_path, int model_id)
 {
-    int dfp_id = 0; // TODO: temp solution
-
-    std::shared_lock lock(runner_mutex);
-    auto it = runner_table.find(dfp_id);
-    if(it == runner_table.end()) {
-        spdlog::error("[MxAcclBase] Error in connect_pre_model: dfp_id {} not found", dfp_id);
-        lock.unlock();
-        throw std::runtime_error("MxAcclBase: Error in connect_pre_model: dfp_id not found");
-    }
-    DFPRunner* dfp_runner = it->second;
-    dfp_runner->models[model_id]->model_set_pre(pre_model_path);
-    lock.unlock();
+    return get_model_or_throw(model_id, CLASS_NAME, __func__)->model_set_pre(pre_model_path);
 }
 
 void MxAcclBase::set_parallel_fmap_convert(int num_threads, int model_id)
 {
-    int dfp_id = 0; // TODO: temp solution
-
-    std::shared_lock lock(runner_mutex);
-    auto it = runner_table.find(dfp_id);
-    if(it == runner_table.end()) {
-        spdlog::error("[MxAcclBase] Error in set_parallel_fmap_convert: dfp_id {} not found", dfp_id);
-        lock.unlock();
-        throw std::runtime_error("MxAcclBase: Error in set_parallel_fmap_convert: dfp_id not found");
-    }
-    DFPRunner* dfp_runner = it->second;
-    dfp_runner->models[model_id]->set_parallel_fmap_convert(num_threads);
-    lock.unlock();
+    return get_model_or_throw(model_id, CLASS_NAME, __func__)->set_parallel_fmap_convert(num_threads);
 }
 
 //==============================================================================================
@@ -557,28 +402,16 @@ bool MxAcclBase::can_get_power_consumption(int device_id)
 
 float MxAcclBase::get_power(int device_id)
 {
-    std::shared_lock<std::shared_mutex> lock(runner_mutex);
-    // get the DFPRunner for this device_id
     auto it = device_to_dfp_id_map.find(device_id);
     if(UNLIKELY(it == device_to_dfp_id_map.end())) {
         spdlog::error("[MxAcclBase] Error in get_power: device_id {} not found in device_to_dfp_id_map", device_id);
-        lock.unlock();
-        return -1;
-    }
-    int dfp_id = it->second;
-    // get the DFPRunner
-    auto dfp_it = runner_table.find(dfp_id);
-    if(UNLIKELY(dfp_it == runner_table.end())) {
-        spdlog::error("[MxAcclBase] Error in get_power: dfp_id {} not found in runner_table", dfp_id);
-        lock.unlock();
         return -1;
     }
 
-    bool is_local = dfp_it->second->is_local();
+    bool is_local = dfp_runner->is_local();
 
     if(!is_local) {
-        Client* client = dfp_it->second->get_first_client();
-        lock.unlock();
+        Client* client = dfp_runner->get_first_client();
 
         // call client->get_avg_max_temp(device_id)
         if(UNLIKELY(client == nullptr)) {
@@ -589,7 +422,6 @@ float MxAcclBase::get_power(int device_id)
         return client->get_avg_power(device_id);
     }
     else {
-        lock.unlock();
         if(device_id < 0 || device_id >= device_manager->all_devices_count) {
             spdlog::error("[MxAcclBase] Error in get_power: device_id {} is out of range", device_id);
             return -1;
@@ -601,28 +433,17 @@ float MxAcclBase::get_power(int device_id)
 
 float MxAcclBase::get_max_temperature(int device_id)
 {
-    std::shared_lock<std::shared_mutex> lock(runner_mutex);
     // get the DFPRunner for this device_id
     auto it = device_to_dfp_id_map.find(device_id);
     if(UNLIKELY(it == device_to_dfp_id_map.end())) {
         spdlog::error("[MxAcclBase] Error in get_max_temperature: device_id {} not found in device_to_dfp_id_map", device_id);
-        lock.unlock();
-        return -1;
-    }
-    int dfp_id = it->second;
-    // get the DFPRunner
-    auto dfp_it = runner_table.find(dfp_id);
-    if(UNLIKELY(dfp_it == runner_table.end())) {
-        spdlog::error("[MxAcclBase] Error in get_max_temperature: dfp_id {} not found in runner_table", dfp_id);
-        lock.unlock();
         return -1;
     }
 
-    bool is_local = dfp_it->second->is_local();
+    bool is_local = dfp_runner->is_local();
 
     if(!is_local) {
-        Client* client = dfp_it->second->get_first_client();
-        lock.unlock();
+        Client* client = dfp_runner->get_first_client();
 
         // call client->get_avg_max_temp(device_id)
         if(UNLIKELY(client == nullptr)) {
@@ -633,7 +454,6 @@ float MxAcclBase::get_max_temperature(int device_id)
         return client->get_inst_max_temp(device_id);
     }
     else {
-        lock.unlock();
         if(device_id < 0 || device_id >= device_manager->all_devices_count) {
             spdlog::error("[MxAcclBase] Error in get_max_temperature: device_id {} is out of range", device_id);
             return -1;
@@ -645,28 +465,17 @@ float MxAcclBase::get_max_temperature(int device_id)
 
 std::vector<float> MxAcclBase::get_chip_temperatures(int device_id)
 {
-    std::shared_lock<std::shared_mutex> lock(runner_mutex);
     // get the DFPRunner for this device_id
     auto it = device_to_dfp_id_map.find(device_id);
     if(UNLIKELY(it == device_to_dfp_id_map.end())) {
         spdlog::error("[MxAcclBase] Error in get_chip_temperatures: device_id {} not found in device_to_dfp_id_map", device_id);
-        lock.unlock();
-        return std::vector<float>();
-    }
-    int dfp_id = it->second;
-    // get the DFPRunner
-    auto dfp_it = runner_table.find(dfp_id);
-    if(UNLIKELY(dfp_it == runner_table.end())) {
-        spdlog::error("[MxAcclBase] Error in get_chip_temperatures: dfp_id {} not found in runner_table", dfp_id);
-        lock.unlock();
         return std::vector<float>();
     }
 
-    bool is_local = dfp_it->second->is_local();
+    bool is_local = dfp_runner->is_local();
 
     if(!is_local) {
-        Client* client = dfp_it->second->get_first_client();
-        lock.unlock();
+        Client* client = dfp_runner->get_first_client();
 
         // call client->get_avg_max_temp(device_id)
         if(UNLIKELY(client == nullptr)) {
@@ -677,7 +486,6 @@ std::vector<float> MxAcclBase::get_chip_temperatures(int device_id)
         return client->get_avg_temp_per_chip(device_id);
     }
     else {
-        lock.unlock();
         if(device_id < 0 || device_id >= device_manager->all_devices_count) {
             spdlog::error("[MxAcclBase] Error in get_chip_temperatures: device_id {} is out of range", device_id);
             return std::vector<float>();
@@ -689,28 +497,17 @@ std::vector<float> MxAcclBase::get_chip_temperatures(int device_id)
 
 Pressure MxAcclBase::get_pressure(int device_id)
 {
-    std::shared_lock<std::shared_mutex> lock(runner_mutex);
     // get the DFPRunner for this device_id
     auto it = device_to_dfp_id_map.find(device_id);
     if(UNLIKELY(it == device_to_dfp_id_map.end())) {
         spdlog::error("[MxAcclBase] Error in get_pressure: device_id {} not found in device_to_dfp_id_map", device_id);
-        lock.unlock();
-        return Pressure(Pressure::Level::FULL);
-    }
-    int dfp_id = it->second;
-    // get the DFPRunner
-    auto dfp_it = runner_table.find(dfp_id);
-    if(UNLIKELY(dfp_it == runner_table.end())) {
-        spdlog::error("[MxAcclBase] Error in get_pressure: dfp_id {} not found in runner_table", dfp_id);
-        lock.unlock();
         return Pressure(Pressure::Level::FULL);
     }
 
-    bool is_local = dfp_it->second->is_local();
+    bool is_local = dfp_runner->is_local();
 
     if(!is_local) {
-        Client* client = dfp_it->second->get_first_client();
-        lock.unlock();
+        Client* client = dfp_runner->get_first_client();
 
         // call client->get_pressure(device_id)
         if(UNLIKELY(client == nullptr)) {
@@ -732,7 +529,6 @@ Pressure MxAcclBase::get_pressure(int device_id)
         }
     }
     else {
-        lock.unlock();
         if(device_id < 0 || ((unsigned int)device_id) >= pressure_avgs.size()) {
             spdlog::error("[MxAcclBase] Error in get_pressure: device_id {} is out of range", device_id);
             return -1;
@@ -761,28 +557,17 @@ Pressure MxAcclBase::get_pressure(int device_id)
 
 bool MxAcclBase::set_operating_frequency(int device_id, MxFrequencyOption freq_option)
 {
-    std::shared_lock<std::shared_mutex> lock(runner_mutex);
     // get the DFPRunner for this device_id
     auto it = device_to_dfp_id_map.find(device_id);
     if(UNLIKELY(it == device_to_dfp_id_map.end())) {
         spdlog::error("[MxAcclBase] Error in set_operating_frequency: device_id {} not found in device_to_dfp_id_map", device_id);
-        lock.unlock();
-        return false;
-    }
-    int dfp_id = it->second;
-    // get the DFPRunner
-    auto dfp_it = runner_table.find(dfp_id);
-    if(UNLIKELY(dfp_it == runner_table.end())) {
-        spdlog::error("[MxAcclBase] Error in set_operating_frequency: dfp_id {} not found in runner_table", dfp_id);
-        lock.unlock();
         return false;
     }
 
-    bool is_local = dfp_it->second->is_local();
+    bool is_local = dfp_runner->is_local();
 
     if(!is_local) {
-        Client* client = dfp_it->second->get_first_client();
-        lock.unlock();
+        Client* client = dfp_runner->get_first_client();
 
         // call client->get_avg_max_temp(device_id)
         if(UNLIKELY(client == nullptr)) {
@@ -793,7 +578,6 @@ bool MxAcclBase::set_operating_frequency(int device_id, MxFrequencyOption freq_o
         return client->set_power_mode(device_id, (uint16_t) freq_option);
     }
     else {
-        lock.unlock();
         if(device_id < 0 || device_id >= device_manager->all_devices_count) {
             spdlog::error("[MxAcclBase] Error in set_operating_frequency: device_id {} is out of range", device_id);
             return false;

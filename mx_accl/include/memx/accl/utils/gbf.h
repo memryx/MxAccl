@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -216,22 +216,22 @@ void gbf_encode(uint32_t* __restrict flt32_buffer, uint8_t* __restrict gbf80_buf
 //===========================================================================
 // LZCNT
 static const uint8_t lzcnt_lut[256] = {
-  8,7,6,6,5,5,5,5,4,4,4,4,4,4,4,4,
-  3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+    8, 7, 6, 6, 5, 5, 5, 5, 4, 4, 4, 4, 4, 4, 4, 4,
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 #define lzcnt8(x) lzcnt_lut[(x)]
 
@@ -249,17 +249,17 @@ inline uint8_t saturated_subtract8(uint8_t a, uint8_t b)
 //===========================================================================
 // PREFETCH
 #ifdef USE_X86_OPT
- #define prefetch_ptr(x) _mm_prefetch((x), _MM_HINT_T0)
+    #define prefetch_ptr(x) _mm_prefetch((x), _MM_HINT_T0)
 #else
- #if (__GNUC__ >= 10)
-  #if __has_builtin(__builtin_prefetch)
-   #define prefetch_ptr(x) __builtin_prefetch((x))
-  #else
-   #define prefetch_ptr(x) {}
-  #endif
- #else
-  #define prefetch_ptr(x) {}
- #endif
+    #if (__GNUC__ >= 10)
+        #if __has_builtin(__builtin_prefetch)
+            #define prefetch_ptr(x) __builtin_prefetch((x))
+        #else
+            #define prefetch_ptr(x) {}
+        #endif
+    #else
+        #define prefetch_ptr(x) {}
+    #endif
 #endif
 
 
@@ -274,8 +274,8 @@ inline uint8_t saturated_subtract8(uint8_t a, uint8_t b)
 inline void gbf_decode(uint8_t* __restrict gbf80_buffer, uint32_t* __restrict flt32_buffer, unsigned int length)
 {
 
- // ARM64 NEON optimized version
- #ifdef USE_ARM64_OPT
+    // ARM64 NEON optimized version
+#ifdef USE_ARM64_OPT
     unsigned int off_g = 0;
     unsigned int off_f = 0;
 
@@ -377,29 +377,29 @@ inline void gbf_decode(uint8_t* __restrict gbf80_buffer, uint32_t* __restrict fl
         // WARNING: we RELY on the invalid channels having
         //          all zeros when coming from the chip!
         gbf_decode(gbf80_buffer + off_g, tmp, 8);
-        for (unsigned r = 0; off_f + r < length; ++r){
+        for (unsigned r = 0; off_f + r < length; ++r) {
             flt32_buffer[off_f + r] = tmp[r];
         }
     }
 
- #else
-  #ifdef USE_X86_OPT
+#else
+#ifdef USE_X86_OPT
     // masks to extract 7 mantissa bytes and 7 sign bits from the low 64 bits
     // mantissas at [9k .. 9k+7], signs at bit (9k+8), k=0..6
     static const uint64_t MANT_MASK =
-        (0xFFull<<0) | (0xFFull<<9) | (0xFFull<<18) |
-        (0xFFull<<27)| (0xFFull<<36)| (0xFFull<<45)|
-        (0xFFull<<54);
+        (0xFFull << 0) | (0xFFull << 9) | (0xFFull << 18) |
+        (0xFFull << 27) | (0xFFull << 36) | (0xFFull << 45) |
+        (0xFFull << 54);
 
     static const uint64_t SIGN_MASK =
-        (1ull<<8) | (1ull<<17) | (1ull<<26) |
-        (1ull<<35)| (1ull<<44)| (1ull<<53)|
-        (1ull<<62);
+        (1ull << 8) | (1ull << 17) | (1ull << 26) |
+        (1ull << 35) | (1ull << 44) | (1ull << 53) |
+        (1ull << 62);
 
     // nibble lz table for 4-bit leading zeros: idx 0..15
     const __m128i LZ4 = _mm_setr_epi8(
-        4,3,2,2,1,1,1,1, 0,0,0,0,0,0,0,0
-    );
+                            4, 3, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0
+                        );
     const __m128i V4   = _mm_set1_epi8(4);
     const __m128i V8   = _mm_set1_epi8(8);
     const __m128i Z128 = _mm_setzero_si128();
@@ -407,11 +407,11 @@ inline void gbf_decode(uint8_t* __restrict gbf80_buffer, uint32_t* __restrict fl
     // pow2 table for (1 << d) as 16-bit (lo/hi bytes shufflable with PSHUFB)
     // indices 0..8 are used; 9..15 are zero
     const __m128i POW2_LO = _mm_setr_epi8(
-        1,2,4,8,16,32,64,(char)128, 0,0,0,0,0,0,0,0
-    );
+                                1, 2, 4, 8, 16, 32, 64, (char)128, 0, 0, 0, 0, 0, 0, 0, 0
+                            );
     const __m128i POW2_HI = _mm_setr_epi8(
-        0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0,0
-    );
+                                0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0
+                            );
     const __m128i MASK7_16 = _mm_set1_epi16(0x007F);
 
     size_t off_g = 0;
@@ -423,7 +423,7 @@ inline void gbf_decode(uint8_t* __restrict gbf80_buffer, uint32_t* __restrict fl
 
         // load the 80-bit packet as lo64 + hi16
         uint64_t lo; memcpy(&lo, in,   8);
-        uint16_t hi; memcpy(&hi, in+8, 2);
+        uint16_t hi; memcpy(&hi, in + 8, 2);
 
         // shared exponent
         const uint8_t exp = (uint8_t)(hi >> 8);
@@ -518,12 +518,12 @@ inline void gbf_decode(uint8_t* __restrict gbf80_buffer, uint32_t* __restrict fl
         // WARNING: we RELY on the invalid channels having
         //          all zeros when coming from the chip!
         gbf_decode(gbf80_buffer + off_g, tmp, 8);
-        for (unsigned r = 0; off_f + r < length; ++r){
+        for (unsigned r = 0; off_f + r < length; ++r) {
             flt32_buffer[off_f + r] = tmp[r];
         }
     }
 
-  #else
+#else
     // RISC-V, and other architectures
 
     size_t off_f = 0, off_g = 0;
@@ -534,7 +534,7 @@ inline void gbf_decode(uint8_t* __restrict gbf80_buffer, uint32_t* __restrict fl
         uint64_t lo = 0;
         uint16_t hi = 0;
         memcpy(&lo, in, 8);
-        memcpy(&hi, in+8, 2);
+        memcpy(&hi, in + 8, 2);
 
         uint8_t exp = (uint8_t)(hi >> 8);
 
@@ -589,14 +589,14 @@ inline void gbf_decode(uint8_t* __restrict gbf80_buffer, uint32_t* __restrict fl
         uint32_t m7 = ((uint32_t)(t7 << d7)) & 0x7F;
 
         // set the final float vals
-        flt32_buffer[off_f+0] = out0 | (e0<<23) | (m0<<16);
-        flt32_buffer[off_f+1] = out1 | (e1<<23) | (m1<<16);
-        flt32_buffer[off_f+2] = out2 | (e2<<23) | (m2<<16);
-        flt32_buffer[off_f+3] = out3 | (e3<<23) | (m3<<16);
-        flt32_buffer[off_f+4] = out4 | (e4<<23) | (m4<<16);
-        flt32_buffer[off_f+5] = out5 | (e5<<23) | (m5<<16);
-        flt32_buffer[off_f+6] = out6 | (e6<<23) | (m6<<16);
-        flt32_buffer[off_f+7] = out7 | (e7<<23) | (m7<<16);
+        flt32_buffer[off_f + 0] = out0 | (e0 << 23) | (m0 << 16);
+        flt32_buffer[off_f + 1] = out1 | (e1 << 23) | (m1 << 16);
+        flt32_buffer[off_f + 2] = out2 | (e2 << 23) | (m2 << 16);
+        flt32_buffer[off_f + 3] = out3 | (e3 << 23) | (m3 << 16);
+        flt32_buffer[off_f + 4] = out4 | (e4 << 23) | (m4 << 16);
+        flt32_buffer[off_f + 5] = out5 | (e5 << 23) | (m5 << 16);
+        flt32_buffer[off_f + 6] = out6 | (e6 << 23) | (m6 << 16);
+        flt32_buffer[off_f + 7] = out7 | (e7 << 23) | (m7 << 16);
 
         // bump the offsets
         off_f += 8;
@@ -613,22 +613,23 @@ inline void gbf_decode(uint8_t* __restrict gbf80_buffer, uint32_t* __restrict fl
         // WARNING: we RELY on the invalid channels having
         //          all zeros when coming from the chip!
         gbf_decode(gbf80_buffer + off_g, tmp, 8);
-        for (unsigned r = 0; off_f + r < length; ++r){
+        for (unsigned r = 0; off_f + r < length; ++r) {
             flt32_buffer[off_f + r] = tmp[r];
         }
     }
 
-  #endif // USE_X86_OPT
- #endif // USE_ARM64_OPT
+#endif // USE_X86_OPT
+#endif // USE_ARM64_OPT
 
 }
 
-inline void bf16_encode(uint32_t* src, uint8_t* dst, int tensor_size){
+inline void bf16_encode(uint32_t* src, uint8_t* dst, int tensor_size)
+{
 
     const unsigned int n = tensor_size;
     uint16_t* dst16 = (uint16_t*)dst;
 
-  #ifdef USE_X86_OPT
+#ifdef USE_X86_OPT
 
     const __m256i add = _mm256_set1_epi32(0x00008000u);
     size_t i = 0;
@@ -651,8 +652,8 @@ inline void bf16_encode(uint32_t* src, uint8_t* dst, int tensor_size){
     }
     return;
 
-  #else
-   #ifdef USE_ARM64_OPT
+#else
+#ifdef USE_ARM64_OPT
 
     const uint32x4_t add = vdupq_n_u32(0x00008000u);
     size_t i = 0;
@@ -674,7 +675,7 @@ inline void bf16_encode(uint32_t* src, uint8_t* dst, int tensor_size){
     }
     return;
 
-   #else
+#else
 
     // fallback: see if OpenMP-SIMD can work any magic
     #pragma omp simd
@@ -684,12 +685,13 @@ inline void bf16_encode(uint32_t* src, uint8_t* dst, int tensor_size){
     }
     return;
 
-   #endif
-  #endif
+#endif
+#endif
 
 }
 
-inline void bf16_decode(uint8_t* __restrict src, uint32_t* __restrict dst, int tensor_size){
+inline void bf16_decode(uint8_t* __restrict src, uint32_t* __restrict dst, int tensor_size)
+{
 
     uint16_t const* __restrict src16 = (const uint16_t*)src;
 

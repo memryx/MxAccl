@@ -8,6 +8,7 @@ set_target_properties(${MXACCL_DYNAMIC} PROPERTIES SOVERSION 2)
 
 target_compile_options(${MXACCL_DYNAMIC} PRIVATE -Werror)
 
+target_include_directories(${MXACCL_DYNAMIC} PRIVATE ${MX_API_DIR}/mx_accl/include)
 target_include_directories(${MXACCL_DYNAMIC} PRIVATE ${MX_API_HOME_DIR}/extern/asio)
 target_include_directories(${MXACCL_DYNAMIC} PRIVATE ${MX_API_HOME_DIR}/extern/spdlog)
 
@@ -24,3 +25,13 @@ if(CMAKE_BUILD_TYPE MATCHES "Debug")
     BEFORE PUBLIC PUBLIC
   )
 endif()
+
+# Collect manager sources once for use in both test targets
+file(GLOB MANAGER_SRCS "${MX_API_HOME_DIR}/mxa_manager/src/*.cpp")
+
+# Common include directories used by all tests
+set(COMMON_INCLUDES
+    ${MX_API_HOME_DIR}/mxa_manager/include
+    ${MX_API_HOME_DIR}/extern/asio
+    ${MX_API_HOME_DIR}/extern/spdlog
+)

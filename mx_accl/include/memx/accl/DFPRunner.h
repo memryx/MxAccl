@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -64,13 +64,14 @@ class DFPRunner
 
     bool is_local();
     int get_num_chips();
+    std::vector<int> get_converted_device_ids_to_use() const;
 
     ~DFPRunner();
 
     // Model management
     int num_models;
     std::vector<MxModel*> models; // includes .model_run, etc. flags too
-
+    MxModel* get_model(int model_id);
 
     // Init everything for local mode execution
     bool init_local();
@@ -102,6 +103,7 @@ class DFPRunner
     int num_devices_;
     std::vector<int> device_ids_to_use_;
     std::vector<int> open_contexts_;
+    std::vector<int> converted_dev_ids_; // after conversion by device manager
 
     // Whether local or shared
     bool local_mode_;
@@ -120,12 +122,25 @@ class DFPRunner
         }
         return clients[0];
     }
+    
+
+    // for auto-autoclock RESULTS information storage per device
+    typedef struct {
+        bool autoclock_enabled;
+        unsigned int power_limit_mw;
+        MX::Types::MxFrequencyOption freq;
+    } autoclock_info_t;
 
   private:
 
     // Device manager
     DeviceManager* device_manager_;
     void devman_discover(Client* client_);
+
+    // for auto-autoclock information per device
+    //   (device_id -> autoclock_info_t)
+    std::map<int, autoclock_info_t> autoclock_infos;
+
 
     // Either 1 total client for Local mode, or a client for
     // each separate model for Shared mode

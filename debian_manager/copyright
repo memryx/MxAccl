@@ -3,7 +3,7 @@ Source: https://github.com/memryx/MxAccl
 Upstream-Name: MemryX ACCeLerator Runtime (C++)
 Files:
  *
-Copyright: 2025, MemryX <no-reply@memryx.com>
+Copyright: 2026, MemryX <no-reply@memryx.com>
 License:   MPL-2.0
  This Source Code Form is subject to the terms of the Mozilla Public
  License, v. 2.0. If a copy of the MPL was not distributed with this

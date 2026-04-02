@@ -17,6 +17,7 @@
 #include <thread>
 #include <cstdint>
 #include <cstring>
+#include <array>
 #include <map>
 #include <unordered_map>
 #include <filesystem>
@@ -25,6 +26,7 @@
 
 #include <memx/accl/messages.h>
 
+#include <memx/accl/utils/mxTypes.h>
 #include <memx/accl/utils/comm_sockets.h>
 #include <memx/accl/utils/sha512.h>
 #include <memx/accl/utils/locked_var.h>
@@ -119,12 +121,16 @@ class Server
     // Stop the server
     void kill();
 
-  private:
+//   private:
+    SharedLockedVar<bool> running;
+
+    //=====================================================
+    // CONFIGURATION OPTIONS
+    //=====================================================
     unsigned short base_port;
     std::string addr;
     const unsigned int hw_monitor_interval_ms;
 
-    SharedLockedVar<bool> running;
 
     //=====================================================
     // CONNECTION LISTENERS
@@ -184,9 +190,6 @@ class Server
     // all the DFPContexts, indexed by hash
     std::mutex dfp_contexts_lock;
     std::map<MX::sha512::hash_t, DFPContext*> dfp_contexts;
-
-    std::shared_mutex dfp_ctx_ptr_lock;
-    std::unordered_map<DFPContext*, bool> dfp_ctx_ptr_valid;
 
     // all the client meta data, indexed by client ID
     std::mutex meta_lock;

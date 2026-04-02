@@ -6,7 +6,6 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 #include "server.h"
-#include "color_print.h"
 
 #include <iostream>
 #include <vector>
@@ -102,19 +101,80 @@ bool parse_config_file(std::string* addr, unsigned short* base_port, std::string
     return true;
 }
 
+bool parse_command_line(int argc, char* argv[], std::string* addr, unsigned short* base_port, std::string* log_level, unsigned int* hw_monitor_interval) {
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+
+        // if the arg is only --version or -V, print the version and exit
+        if (arg == "--version" || arg == "-V") {
+            std::cout << MX::Types::RUNTIME_VERSION << std::endl;
+            exit(0);
+            return false;
+        }
+
+        if ((arg == "--addr" || arg == "-a") && i + 1 < argc) {
+            *addr = argv[++i];
+        } 
+        else if ((arg == "--port" || arg == "-p") && i + 1 < argc) {
+            *base_port = static_cast<unsigned short>(std::stoi(argv[++i]));
+        } 
+        else if ((arg == "--log" || arg == "-l") && i + 1 < argc) {
+            std::string level = argv[++i];
+
+            if(level == "debug" || level == "info" || level == "warn" || level == "critical" ||
+               level == "high" || level == "med" || level == "medium" || level == "low" ||
+               level == "off") {
+                *log_level = level;
+            }
+            else {
+                spdlog::warn("Invalid LOG_LEVEL in config file: {}. Using default (low).", level);
+                *log_level = "low";
+            }
+
+            *log_level = level;
+        } 
+        else if ((arg == "--interval" || arg == "-i") && i + 1 < argc) {
+            *hw_monitor_interval = std::stoul(argv[++i]);
+        }
+        else if (arg == "--help" || arg == "-h") {
+            std::cout << "Usage: mxa_manager [options]\n"
+                      << "  -a, --addr <addr>      Listen address\n"
+                      << "  -p, --port <port>      Base port\n"
+                      << "  -l, --log <level>      Log level (debug, info, warn, critical)\n"
+                      << "  -i, --interval <ms>    HW monitor interval\n"
+                      << "  -V, --version          Print version and exit\n";
+            exit(0);
+            return false;
+        }
+        else {
+            spdlog::error("Unknown command line argument: {}", arg);
+            return false;
+        }
+    }
+    return true;
+}
 
 // main function parses the config file, creates a Server object,
 // then starts the server with .run()
-int main()
+int main(int argc, char* argv[])
 {
     std::string addr;
     unsigned short base_port = 10000;
     std::string log_level = "";
     unsigned int hw_monitor_interval = 500; // in milliseconds
 
-    if(!parse_config_file(&addr, &base_port, &log_level, &hw_monitor_interval)) {
-        return EXIT_FAILURE;
+    if (argc > 1) {
+        // args are fed from command line
+        if(!parse_command_line(argc, argv, &addr, &base_port, &log_level, &hw_monitor_interval)){
+            return EXIT_FAILURE;
+        }
     }
+    else {
+        if(!parse_config_file(&addr, &base_port, &log_level, &hw_monitor_interval)) {
+            return EXIT_FAILURE;
+        }
+    }
+
 
     // set up spdlog logging
     if(log_level == "") {

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -13,6 +13,8 @@
 #include <stdint.h>
 #include <stdexcept>
 #include <iostream>
+#include <string>
+#include <functional>
 
 // for MEMX_API_EXPORT macro
 #include <memx/memx.h>
@@ -22,23 +24,32 @@ namespace MX
 namespace Types
 {
 
+// version info string
+constexpr const char* RUNTIME_VERSION = "2.2.0";
+
+
+class FeatureMap; // forward declaration
+
+// type definition for user callbacks
+typedef std::function<bool(std::vector<const FeatureMap*>, int stream_id)> callback_t;
+
 /**
  * @class ShapeVector
  * @brief Represents the shape of a tensor with flexible dimension ordering.
  *
  * The ShapeVector class encapsulates tensor shape information using a fixed-size or dynamic vector.
- * It provides convenience methods for interpreting and converting between channel-first and 
+ * It provides convenience methods for interpreting and converting between channel-first and
  * channel-last formats. Internally, the shape is represented using four components by default:
  * height (h), width (w), batch (z), and channel (c), but custom-sized shapes are also supported.
  */
 class ShapeVector
 {
-private:
+  private:
     std::vector<int64_t> shape; ///< Underlying storage for shape dimensions.
     int64_t h = 0, w = 0, z = 0, c = 0; ///< Canonical height, width, batch, and channel dimensions.
     int size_ = 4; ///< Default shape size.
 
-public:
+  public:
     /**
      * @brief Default constructor. Initializes the shape with 4 dimensions, all set to 0.
      */
@@ -64,7 +75,7 @@ public:
      * @param index Dimension index.
      * @return Reference to the dimension value at the given index.
      */
-    MEMX_API_EXPORT int64_t& operator[](int64_t index);
+    MEMX_API_EXPORT int64_t &operator[](int64_t index);
 
     /**
      * @brief Returns the shape in channel-first format (e.g., [C, H, W, Z]).
@@ -94,6 +105,17 @@ public:
      * @brief Sets the internal shape to follow channel-first layout.
      */
     MEMX_API_EXPORT void set_ch_first();
+
+    /**
+     * @brief equality operator to compare two ShapeVector objects
+     */
+    MEMX_API_EXPORT bool operator==(const ShapeVector& other) const;
+    MEMX_API_EXPORT bool operator!=(const ShapeVector& other) const;
+
+    /**
+     * @brief Returns a string representation of the shape for debugging purposes.
+     */
+    MEMX_API_EXPORT std::string to_string() const;
 };
 
 /**
@@ -101,8 +123,8 @@ public:
  * @brief Holds metadata and configuration details for a compiled model.
  *
  * The MxModelInfo struct contains essential information about a model compiled
- * for execution, including the number of input and output feature maps, their 
- * shapes and sizes, and the associated layer names. This metadata is typically 
+ * for execution, including the number of input and output feature maps, their
+ * shapes and sizes, and the associated layer names. This metadata is typically
  * used during runtime setup, validation, or for constructing input/output buffers.
  *
  * @var MxModelInfo::model_index
@@ -140,8 +162,12 @@ struct MxModelInfo {
     std::vector<std::string> output_layer_names;
     std::vector<MX::Types::ShapeVector> in_featuremap_shapes;
     std::vector<MX::Types::ShapeVector> out_featuremap_shapes;
+    std::vector<std::vector<int64_t>> in_raw_shapes;
+    std::vector<std::vector<int64_t>> out_raw_shapes;
     std::vector<size_t> in_featuremap_sizes;
     std::vector<size_t> out_featuremap_sizes;
+    bool use_model_shape_in;
+    bool use_model_shape_out;
 };
 
 /**
@@ -152,6 +178,7 @@ struct MxModelInfo {
  */
 enum MxFrequencyOption : uint16_t {
     FREQ_USE_CONF = 0,  ///< Use the current value of /etc/memryx/power.conf instead of overriding
+    MX_FREQUENCY_OPTION_INVALID = 1,
     FREQ_200MHz = 200,
     FREQ_225MHz = 225,
     FREQ_250MHz = 250,
@@ -188,7 +215,8 @@ enum MxFrequencyOption : uint16_t {
 };
 
 
-inline bool is_valid_frequency_option(uint16_t f){
+inline bool is_valid_frequency_option(uint16_t f)
+{
     switch (f) {
         case FREQ_USE_CONF:
         case FREQ_200MHz:
@@ -297,34 +325,37 @@ MEMX_API_EXPORT MxVoltageOption getVoltageFromFrequency(MxFrequencyOption freq);
  */
 class Pressure
 {
-public:
+  public:
     typedef enum Level : int {
         LOW = 0,
         MEDIUM = 1,
         HIGH = 2,
         FULL = 3
     } Level;
-private:
+  private:
     Level level;
-public:
+  public:
     Pressure() : level(Level::LOW) {}
     Pressure(Level lvl) : level(lvl) {}
-    Pressure(const std::string& str) : level(fromString(str)) {}
-    Pressure(const Pressure& other) : level(other.level) {}
-    Pressure(int val) : level(static_cast<Level>(val)) {
+    Pressure(const std::string &str) : level(fromString(str)) {}
+    Pressure(const Pressure &other) : level(other.level) {}
+    Pressure(int val) : level(static_cast<Level>(val))
+    {
         if (val < 0 || val > 3) {
             throw std::invalid_argument("Invalid pressure level integer: " + std::to_string(val));
         }
     }
-    Level fromString(const std::string& str) const {
-        if (str == "low") return Level::LOW;
-        if (str == "medium") return Level::MEDIUM;
-        if (str == "high") return Level::HIGH;
-        if (str == "full") return Level::FULL;
+    Level fromString(const std::string &str) const
+    {
+        if (str == "low") { return Level::LOW; }
+        if (str == "medium") { return Level::MEDIUM; }
+        if (str == "high") { return Level::HIGH; }
+        if (str == "full") { return Level::FULL; }
         throw std::invalid_argument("Invalid pressure level string: " + str);
         return Level::FULL;
     }
-    std::string toString() const {
+    std::string toString() const
+    {
         switch (level) {
             case Level::LOW: return "low";
             case Level::MEDIUM: return "medium";
@@ -333,78 +364,100 @@ public:
             default: return "error";
         }
     }
-    Pressure& operator=(const Pressure& other) {
+    Pressure &operator=(const Pressure &other)
+    {
         if (this != &other) {
             level = other.level;
         }
         return *this;
     }
-    Pressure& operator=(const std::string& str) {
+    Pressure &operator=(const std::string &str)
+    {
         level = fromString(str);
         return *this;
     }
-    Pressure& operator=(int val) {
+    Pressure &operator=(int val)
+    {
         if (val < 0 || val > 3) {
             throw std::invalid_argument("Invalid pressure level integer: " + std::to_string(val));
         }
         level = static_cast<Level>(val);
         return *this;
     }
-    bool operator==(const Pressure& other) const {
+    bool operator==(const Pressure &other) const
+    {
         return level == other.level;
     }
-    bool operator==(const std::string& str) const {
+    bool operator==(const std::string &str) const
+    {
         return level == fromString(str);
     }
-    bool operator==(int val) const {
+    bool operator==(int val) const
+    {
         return level == static_cast<Level>(val);
     }
-    bool operator!=(const Pressure& other) const {
+    bool operator!=(const Pressure &other) const
+    {
         return level != other.level;
     }
-    bool operator!=(const std::string& str) const {
+    bool operator!=(const std::string &str) const
+    {
         return level != fromString(str);
     }
-    bool operator!=(int val) const {
+    bool operator!=(int val) const
+    {
         return level != static_cast<Level>(val);
     }
-    bool operator<(const Pressure& other) const {
+    bool operator<(const Pressure &other) const
+    {
         return level < other.level;
     }
-    bool operator<(const std::string& str) const {
+    bool operator<(const std::string &str) const
+    {
         return level < fromString(str);
     }
-    bool operator<(int val) const {
+    bool operator<(int val) const
+    {
         return level < static_cast<Level>(val);
     }
-    bool operator<=(const Pressure& other) const {
+    bool operator<=(const Pressure &other) const
+    {
         return level <= other.level;
     }
-    bool operator<=(const std::string& str) const {
+    bool operator<=(const std::string &str) const
+    {
         return level <= fromString(str);
     }
-    bool operator<=(int val) const {
+    bool operator<=(int val) const
+    {
         return level <= static_cast<Level>(val);
     }
-    bool operator>(const Pressure& other) const {
+    bool operator>(const Pressure &other) const
+    {
         return level > other.level;
     }
-    bool operator>(const std::string& str) const {
+    bool operator>(const std::string &str) const
+    {
         return level > fromString(str);
     }
-    bool operator>(int val) const {
+    bool operator>(int val) const
+    {
         return level > static_cast<Level>(val);
     }
-    bool operator>=(const Pressure& other) const {
+    bool operator>=(const Pressure &other) const
+    {
         return level >= other.level;
     }
-    bool operator>=(const std::string& str) const {
+    bool operator>=(const std::string &str) const
+    {
         return level >= fromString(str);
     }
-    bool operator>=(int val) const {
+    bool operator>=(int val) const
+    {
         return level >= static_cast<Level>(val);
     }
-    friend std::ostream& operator<<(std::ostream& os, const Pressure& p) {
+    friend std::ostream &operator<<(std::ostream &os, const Pressure &p)
+    {
         switch (p.level) {
             case Level::LOW: os << "low"; break;
             case Level::MEDIUM: os << "medium"; break;

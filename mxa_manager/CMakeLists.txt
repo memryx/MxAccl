@@ -60,9 +60,6 @@ if (WIN32)
         ${UDRIVER_LIB}
     )
 
-    target_include_directories(mxa_manager PRIVATE
-        "C:/Program Files/MemryX/include"
-    )
 
 else()
     add_executable(mxa_manager

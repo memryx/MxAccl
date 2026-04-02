@@ -112,7 +112,7 @@ class ContextClient
     std::unordered_map<uint8_t, BQExtFlag<IomapItem*>*>* ofmap_freelists;
 
     explicit ContextClient(uint32_t id_, uint32_t obuffer_size_, uint32_t num_ofmaps_, uint64_t* ofmap_sizes,
-                           std::vector<uint8_t> allowed_driver_ctxs_, SharedLockedVar<bool> *alive_flag);
+                           std::vector<uint8_t> allowed_driver_ctxs_, SharedLockedVar<bool>* alive_flag);
 
     ~ContextClient();
 
@@ -160,7 +160,7 @@ class ModelContext
     std::mutex client_table_lock;
 
     // creates a new client entry (including ofmap queues)
-    ContextClient* add_client(uint32_t id, SharedLockedVar<bool> *alive_flag);
+    ContextClient* add_client(uint32_t id, SharedLockedVar<bool>* alive_flag);
 
     bool is_client_existed(ContextClient* client);
     bool is_client_list_empty();
@@ -202,16 +202,16 @@ class CtxBlockyQueue : public BlockyQueue<IomapItem*>
     //     // pop
     //     ret = this->q.front();
     //     this->q.pop_front();
-        
+
     //     // wake up anyone waiting on full
     //     this->s_not_full.notify_one();
-        
+
     //     if (mctx_->is_client_existed(ret->dest_client) == false) {
     //         // client no longer exists
     //         lock.unlock();
     //         return false;
     //     }
-        
+
     //     // push the ctx_id to the driver's fifo
     //     ret->dest_client->driver_ctx_fifo->push(ctx_id);
 
@@ -227,17 +227,18 @@ class CtxBlockyQueue : public BlockyQueue<IomapItem*>
         std::unique_lock<std::mutex> lock(this->m);
         bool got_data;
 
-        if(timeout_ms > 0){
+        if(timeout_ms > 0) {
             got_data = this->s_not_empty.wait_for(
-                            lock,
-                            std::chrono::milliseconds(timeout_ms),
-                            [this] { return (!(this->q.empty())) || this->kill; }
-                        );
-        } else {
+                           lock,
+                           std::chrono::milliseconds(timeout_ms),
+                           [this] { return (!(this->q.empty())) || this->kill; }
+                       );
+        }
+        else {
             this->s_not_empty.wait(
-                 lock,
-                 [this] { return (!(this->q.empty())) || this->kill; }
-             );
+                lock,
+                [this] { return (!(this->q.empty())) || this->kill; }
+            );
             got_data = !(this->kill); // if we got here, it means we got data
         }
 
@@ -246,7 +247,7 @@ class CtxBlockyQueue : public BlockyQueue<IomapItem*>
         ret = this->q.front();
         this->q.pop_front();
         this->s_not_full.notify_one();
-        
+
         // push the ctx_id to the driver's fifo
         ret->dest_client->driver_ctx_fifo->push(ctx_id);
 
@@ -254,8 +255,8 @@ class CtxBlockyQueue : public BlockyQueue<IomapItem*>
         return true;
     }
 
-    private:
-        ModelContext* mctx_;
+  private:
+    ModelContext* mctx_;
 };
 
 // this model's Port information
@@ -310,8 +311,7 @@ class DFPContext
 {
 
   public:
-    DFPContext(uint64_t dfp_raw_size_, uint8_t* dfp_bytes, hash_t h, uint32_t ibuffer_size_, uint32_t obuffer_size_,
-               std::vector<uint8_t> devices_to_use_);
+    DFPContext(uint64_t dfp_raw_size_, uint8_t* dfp_bytes, hash_t h, uint32_t ibuffer_size_, uint32_t obuffer_size_, std::vector<uint8_t> devices_to_use_);
     ~DFPContext();
 
     ModelContext*  get_mctx(int idx);

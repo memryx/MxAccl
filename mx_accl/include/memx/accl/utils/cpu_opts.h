@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -10,8 +10,10 @@
 
 #pragma once
 
-namespace MX {
-namespace Utils { 
+namespace MX
+{
+namespace Utils
+{
 
 /**
  * @brief Sets the CPU affinity of the current thread and all children to the big cores.

@@ -12,7 +12,7 @@ override_dh_install:
 	dh_install build/mx_accl/libmx_accl.so.2 usr/lib/$(DEB_HOST_GNU_CPU)-linux-gnu/
 	dh_link usr/lib/$(DEB_HOST_GNU_CPU)-linux-gnu/libmx_accl.so.2 usr/lib/$(DEB_HOST_GNU_CPU)-linux-gnu/libmx_accl.so
 	dh_install mx_accl/include/memx/* usr/include/memx/
-	dh_install build/samples/acclBench/acclBench usr/bin/
+	dh_install build/tools/acclBench/acclBench usr/bin/
 
 override_dh_shlibdeps:
 	dh_shlibdeps --dpkg-shlibdeps-params=--ignore-missing-info

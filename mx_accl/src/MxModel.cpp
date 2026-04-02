@@ -1,189 +1,253 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-#include <fstream>
-
-#include "spdlog/spdlog.h"
-
 #include <memx/accl/MxModel.h>
 #include <memx/accl/prepost.h>
 
+#include "spdlog/spdlog.h"
+
+#include <fstream>
 
 using namespace MX::Runtime;
 using namespace MX::Types;
 using namespace MX::Utils;
 
-#define VECTOR_INIT_BUFFER_LEN 500
-std::chrono::milliseconds INPUT_TASK_TIMEOUT = 500ms;
+MxModel::MxModel(int model_id,
+                 Dfp::DfpObject* dfp,
+                 std::array<bool, 2> use_model_shape,
+                 bool local_mode,
+                 std::vector<int> open_contexts,
+                 Client* client)
+{
+    // One task per stream, tasks will be added in connect_stream()
+    input_tasks_ = new BQExtFlagX<StreamTask*>(UINT_MAX, &in_session_done_, true);
 
-MxModel::MxModel(int model_id, Dfp::DfpObject* dfp, std::array<bool, 2> use_model_shape_, bool local_mode_, std::vector<int> open_contexts_, Client* client_)
+    // init variables
+    model_id_ = model_id;
+    local_mode_ = local_mode;
+    dfp_ = dfp;
+    open_contexts_ = open_contexts;
+    client_ = client;
+    use_model_shape_ = use_model_shape;
+
+    // init model info
+    in_ports_ = dfp_->get_dfp_meta()->model_inports[model_id];
+    out_ports_ = dfp_->get_dfp_meta()->model_outports[model_id];
+    _init_model_info();
+}
+
+void MxModel::_init_model_info()
 {
 
-    local_mode = local_mode_;
-    dfp_ = dfp;
-    open_contexts = open_contexts_;
-    client = client_;
-    use_model_shape = use_model_shape_;
-
-    //Initate the model
-    model_run.store(false);
-    model_recv_run.store(false);
-    model_manual_run.store(false);
-    model_manual_in_done = false;
-    num_streams_ = 0;
-    parallel_fmap_convert_threads = 1;
-    input_num_workers_ = 0;
-    output_num_workers_ = 0;
-    meta_ = dfp_->get_dfp_meta();
-    in_ports_ = meta_->model_inports[model_id];
-    out_ports_ = meta_->model_outports[model_id];
-    mxa_gen = meta_->mxa_gen;
     int num_in_ports = in_ports_.size();
     int num_op_ports = out_ports_.size();
-    model_info.model_index = model_id;
-    model_info.num_in_featuremaps = num_in_ports;
-    model_info.num_out_featuremaps = num_op_ports;
-    model_info.input_layer_names.reserve(num_in_ports);
-    model_info.in_featuremap_shapes.reserve(num_in_ports);
-    model_info.in_featuremap_sizes.reserve(num_in_ports);
-    model_info.output_layer_names.reserve(num_op_ports);
-    model_info.out_featuremap_shapes.reserve(num_op_ports);
-    model_info.out_featuremap_sizes.reserve(num_op_ports);
-    context_send_current_index = 0;
-    number_of_contexts = open_contexts.size();
 
-    //Setting up the model infro from dfp
-    for(int ip = 0; ip < num_in_ports ; ++ip) {
+    minfo.model_index = model_id_;
+    minfo.num_in_featuremaps = num_in_ports;
+    minfo.num_out_featuremaps = num_op_ports;
+    minfo.use_model_shape_in = use_model_shape_[0];
+    minfo.use_model_shape_out = use_model_shape_[1];
+
+    // init input model info
+    for (int ip = 0; ip < num_in_ports; ++ip) {
         int port_idx = in_ports_[ip];
-        int64_t h = dfp_->input_port(port_idx)->dim_h;
-        int64_t w = dfp_->input_port(port_idx)->dim_w;
-        int64_t z = dfp_->input_port(port_idx)->dim_z;
-        int64_t c = dfp_->input_port(port_idx)->dim_c;
+        Dfp::PortInfo* pinfo = dfp_->input_port(port_idx);
+
+        int64_t h = pinfo->dim_h;
+        int64_t w = pinfo->dim_w;
+        int64_t z = pinfo->dim_z;
+        int64_t c = pinfo->dim_c;
 
         MX::Types::ShapeVector featureMap_shape{h, w, z, c};
 
-        model_info.input_layer_names.push_back(std::string(dfp_->input_port(port_idx)->layer_name));
-        model_info.in_featuremap_shapes.push_back(featureMap_shape);
-        model_info.in_featuremap_sizes.push_back(dfp_->input_port(port_idx)->total_size);
-        //printf("\n>> In layer \"%s\" total_size: %lu\n", dfp_->input_port(port_idx)->layer_name, dfp_->input_port(port_idx)->total_size);
+        minfo.input_layer_names.push_back(std::string(pinfo->layer_name));
+        minfo.in_featuremap_shapes.push_back(featureMap_shape);
+        minfo.in_featuremap_sizes.push_back(pinfo->total_size);
+
+        // Adding raw shape info
+        std::vector<int64_t> raw(pinfo->raw_shape.size());
+        for (const auto &pair : pinfo->raw_shape) {
+            raw[pair.first] = pair.second;
+        }
+        minfo.in_raw_shapes.push_back(raw);
     }
 
-    for(int op = 0; op < num_op_ports ; ++op) {
+    // init output model info
+    for (int op = 0; op < num_op_ports; ++op) {
         int port_idx = out_ports_[op];
-        int64_t h = dfp_->output_port(port_idx)->dim_h;
-        int64_t w = dfp_->output_port(port_idx)->dim_w;
-        int64_t z = dfp_->output_port(port_idx)->dim_z;
-        int64_t c = dfp_->output_port(port_idx)->dim_c;
+
+        Dfp::PortInfo* pinfo = dfp_->output_port(port_idx);
+
+        int64_t h = pinfo->dim_h;
+        int64_t w = pinfo->dim_w;
+        int64_t z = pinfo->dim_z;
+        int64_t c = pinfo->dim_c;
 
         MX::Types::ShapeVector featureMap_shape{h, w, z, c};
 
-        model_info.output_layer_names.push_back(std::string(dfp_->output_port(port_idx)->layer_name));
-        model_info.out_featuremap_shapes.push_back(featureMap_shape);
-        model_info.out_featuremap_sizes.push_back(dfp_->output_port(port_idx)->total_size);
-        //printf("\n<< Out layer \"%s\" total_size: %lu\n", dfp_->output_port(port_idx)->layer_name, dfp_->output_port(port_idx)->total_size);
+        minfo.output_layer_names.push_back(std::string(pinfo->layer_name));
+        minfo.out_featuremap_shapes.push_back(featureMap_shape);
+        minfo.out_featuremap_sizes.push_back(pinfo->total_size);
+
+        // Adding raw shape info
+        std::vector<int64_t> raw(pinfo->raw_shape.size());
+        for (const auto &pair : pinfo->raw_shape) {
+            raw[pair.first] = pair.second;
+        }
+        minfo.out_raw_shapes.push_back(raw);
     }
-    input_task_flag = true;
 }
 
 /**
  * Create and append the input featuremaps to the vector of input featuremaps
  *
- * Each time this called, it allocates the input featuremaps and their transposed versions
- * and appends them to the vector. If the pre-processing model is connected,
- * it also allocates the input featuremaps for the pre-processing vector.
+ * Each time this called, it allocates the input featuremaps and their
+ * transposed versions and appends them to the vector. If the pre-processing
+ * model is connected, it also allocates the input featuremaps for the
+ * pre-processing vector.
  */
-void MxModel::create_and_append_in_fm()
+IomapItem* MxModel::_create_in_item()
 {
-    if(!pre_model_path.empty()) {
-        PrePost* temp_model = mx_create_prepost(pre_model_path);
-        if(temp_model == nullptr) {
-            throw(std::runtime_error("Error creating pre-procesing model - please verify connect_pre_model() "));
-        }
-        pre_model.push_back(temp_model);
-    }
-
-
     // user --> pre_in_fmap --> plugin --> in_featuremaps --> chip
 
-    if(!pre_model_path.empty()) {
-        vector<FeatureMap*> temp_piv;
-        for(int l = 0; l < (int)pre_info_model->get_input_names().size() ; ++l) {
-            FeatureMap* t = new FeatureMap(pre_model_info.in_featuremap_sizes[l], MX_FMT_FP32);
-            t->fm_type = FM_PRE;
-            temp_piv.push_back(t);
-        }
-        pre_in_featuremaps_.push_back(temp_piv);
+    IomapItem* item = new IomapItem();
+
+    // init non-const fmaps
+    for (int i = 0; i < static_cast<int>(in_ports_.size()); ++i) {
+        int port = in_ports_[i];
+        Dfp::PortInfo* pinfo = dfp_->input_port(port);
+
+        FeatureMap* t = new FeatureMap(pinfo->total_size,
+                                       (MX_data_format)pinfo->format,
+                                       pinfo->dim_h,
+                                       pinfo->dim_w,
+                                       pinfo->dim_z,
+                                       pinfo->dim_c,
+                                       parallel_fmap_convert_threads_,
+                                       use_model_shape_[0],
+                                       pinfo);
+
+        item->ifmaps.push_back(t);
     }
 
-    vector<FeatureMap*> temp_v;
-    vector<FeatureMap*> temp_iv;
-    for (int k = 0; k < static_cast<int>(in_ports_.size()); ++k) {
-        int port_idx = in_ports_[k];
-        FeatureMap* t = new FeatureMap(dfp_->input_port(port_idx)->total_size,
-                                       (MX_data_format) dfp_->input_port(port_idx)->format,
-                                       dfp_->input_port(port_idx)->dim_h,
-                                       dfp_->input_port(port_idx)->dim_w,
-                                       dfp_->input_port(port_idx)->dim_z,
-                                       dfp_->input_port(port_idx)->dim_c,
-                                       parallel_fmap_convert_threads,
-                                       use_model_shape[0],
-                                       dfp_->input_port(port_idx));
-        temp_v.push_back(t);
-        FeatureMap* t_in = new FeatureMap(*t);
-        temp_iv.push_back(t_in);
+    // init const fmaps
+    for (FeatureMap* fmap : item->ifmaps) {
+        item->c_ifmaps.push_back(static_cast<const FeatureMap*>(fmap));
     }
-    in_featuremaps_.push_back(temp_v);
-    transposed_in_featuremaps_.push_back(temp_iv);
+
+    // init transposed fmaps
+    for (FeatureMap* fmap : item->ifmaps) {
+        FeatureMap* t_fmap = new FeatureMap(*fmap);
+
+        // setting to FM_PRE, when FeatureMap::set_data is called (in runinference plugin) apply_transforms & convert_data should not run
+        // for pre_in_featuremaps
+        t_fmap->fm_type = FM_PRE;
+
+        item->t_ifmaps.push_back(t_fmap);
+    }
+
+    // init when pre model is connected
+    if (!pre_model_path_.empty()) {
+
+        // init pre model plugin
+        // NOTE: we need to duplicate PrePost model, since it is not thread-safe
+        item->pre_model = mx_create_prepost(pre_model_path_);
+        if (item->pre_model == nullptr) {
+            throw(std::runtime_error("Error creating pre-procesing model - please verify connect_pre_model() "));
+        }
+
+        // init pre model featuremaps
+        for (int i = 0; i < (int)pp_pre->get_input_names().size(); ++i) {
+            FeatureMap* t = new FeatureMap(pre_minfo.in_featuremap_sizes[i], MX_FMT_FP32);
+            t->fm_type = FM_PRE;
+            item->pre_ifmaps.push_back(t);
+        }
+
+        // init const pre model featuremaps
+        for (FeatureMap* fmap : item->pre_ifmaps) {
+            item->pre_c_ifmaps.push_back(static_cast<const FeatureMap*>(fmap));
+        }
+    }
+
+    return item;
 }
 
 /**
  * Create and append the output featuremaps to the vector of output featuremaps
  *
- * Each time this called, it allocates the output featuremaps and their transposed versions
- * and appends them to the vector. If the post-processing model is connected,
- * it also allocates the output featuremaps for the post-processing vector.
+ * Each time this called, it allocates the output featuremaps and their
+ * transposed versions and appends them to the vector. If the post-processing
+ * model is connected, it also allocates the output featuremaps for the
+ * post-processing vector.
  */
-void MxModel::create_and_append_out_fm()
+IomapItem* MxModel::_create_out_item()
 {
-    vector<FeatureMap*> temp_ov;
-    vector<FeatureMap*> temp_to;
-    for (int k = 0; k < static_cast<int>(out_ports_.size()); ++k) {
-        int port_idx = out_ports_[k];
-        FeatureMap* t = new FeatureMap(dfp_->output_port(port_idx)->total_size,
-                                       (MX_data_format) dfp_->output_port(port_idx)->format,
-                                       dfp_->output_port(port_idx)->dim_h,
-                                       dfp_->output_port(port_idx)->dim_w,
-                                       dfp_->output_port(port_idx)->dim_z,
-                                       dfp_->output_port(port_idx)->dim_c,
-                                       parallel_fmap_convert_threads,
-                                       use_model_shape[1],
-                                       dfp_->output_port(port_idx));
-        temp_ov.push_back(t);
-        FeatureMap* t_out = new FeatureMap(*t);
-        temp_to.push_back(t_out);
+    IomapItem* item = new IomapItem();
+
+    // init non-const fmaps
+    for (int i = 0; i < static_cast<int>(out_ports_.size()); ++i) {
+        int port = out_ports_[i];
+        Dfp::PortInfo* pinfo = dfp_->output_port(port);
+
+        FeatureMap* t = new FeatureMap(pinfo->total_size,
+                                       (MX_data_format)pinfo->format,
+                                       pinfo->dim_h,
+                                       pinfo->dim_w,
+                                       pinfo->dim_z,
+                                       pinfo->dim_c,
+                                       parallel_fmap_convert_threads_,
+                                       use_model_shape_[1],
+                                       pinfo);
+
+        item->ofmaps.push_back(t);
     }
-    out_featuremaps_.push_back(temp_ov);
-    transposed_out_featuremaps_.push_back(temp_to);
-    if(!post_model_path_.empty()) {
-        PrePost* temp_model = mx_create_prepost(post_model_path_);
-        if(temp_model == nullptr) {
-            throw(std::runtime_error("Error creating post-procesing model - please verify connect_post_model() "));
+
+    // init const fmaps
+    for (FeatureMap* fmap : item->ofmaps) {
+        item->c_ofmaps.push_back(static_cast<const FeatureMap*>(fmap));
+    }
+
+    // init transposed fmaps
+    for (FeatureMap* fmap : item->ofmaps) {
+        FeatureMap* t_fmap = new FeatureMap(*fmap);
+
+        // setting to FM_POST, when FeatureMap::get_data is called (in runinference plugin) apply_transforms & convert_data should not run
+        // for post_in_featuremaps
+        t_fmap->fm_type = FM_POST;
+
+        item->t_ofmaps.push_back(t_fmap);
+    }
+
+    // init when post model is connected
+    if (!post_model_path_.empty()) {
+
+        // init post model plugin
+        // NOTE: we need to duplicate PrePost model, since it is not thread-safe
+        item->post_model = mx_create_prepost(post_model_path_);
+        if (item->post_model == nullptr) {
+            throw(std::runtime_error("Error creating post-procesing model - "
+                                     "please verify connect_post_model() "));
         }
-        post_model.push_back(temp_model);
-    }
-    if(!post_model_path_.empty()) {
+
+        // init post model featuremaps
         vector<FeatureMap*> temp_pov;
-        for(int l = 0; l < (int)post_info_model->get_output_names().size() ; ++l) {
-            FeatureMap* t = new FeatureMap(post_model_info.out_featuremap_sizes[l]);
+        for (int i = 0; i < (int)pp_post->get_output_names().size(); ++i) {
+            FeatureMap* t = new FeatureMap(post_minfo.out_featuremap_sizes[i]);
             t->fm_type = FM_POST;
-            temp_pov.push_back(t);
+            item->post_ofmaps.push_back(t);
         }
-        post_out_featuremaps_.push_back(temp_pov);
+
+        // init const post model featuremaps
+        for (FeatureMap* fmap : item->post_ofmaps) {
+            item->post_c_ofmaps.push_back(static_cast<const FeatureMap*>(fmap));
+        }
     }
+
+    return item;
 }
 
 /**
@@ -204,65 +268,76 @@ void MxModel::create_and_append_out_fm()
 void MxModel::model_set_post(std::filesystem::path post_path, const std::vector<size_t> &post_out_sizelist)
 {
     post_model_path_ = post_path;
-    post_out_size = post_out_sizelist;
+    post_out_size_ = post_out_sizelist;
 
-    post_info_model = mx_create_prepost(post_model_path_, post_out_size);
-    if(post_info_model->dynamic_output) {
-        if(post_out_size.size() == 0) {
+    pp_post = mx_create_prepost(post_model_path_, post_out_size_);
+
+    if (pp_post->dynamic_output) {
+        if (post_out_size_.size() == 0) {
             throw std::runtime_error("The given post-processing model might have dynamic output size. Please provide the largest \
                                     possible size of output in the second argument of connect_post_model()");
         }
     }
 
-    // must have use_model_shape[1] == true when using a post-processing model
-    if(!use_model_shape[1]) {
+    // must have use_model_shape_[1] == true when using a post-processing model
+    if (!use_model_shape_[1]) {
         spdlog::error("Post-processing model requires use_model_shape.output to be true");
         throw std::runtime_error("Post-processing model requires use_model_shape.output to be true");
     }
 
-    post_info_model->match_names(model_info.output_layer_names, Process_Post);
+    pp_post->match_names(minfo.output_layer_names, Process_Post);
 
-    post_model_info.num_in_featuremaps = model_info.num_out_featuremaps;
-    post_model_info.in_featuremap_shapes = model_info.out_featuremap_shapes;
-    post_model_info.in_featuremap_sizes = model_info.out_featuremap_sizes;
-    post_model_info.input_layer_names = model_info.output_layer_names;
+    post_minfo.num_in_featuremaps = minfo.num_out_featuremaps;
+    post_minfo.in_featuremap_shapes = minfo.out_featuremap_shapes;
+    post_minfo.in_featuremap_sizes = minfo.out_featuremap_sizes;
+    post_minfo.input_layer_names = minfo.output_layer_names;
+    post_minfo.use_model_shape_in = use_model_shape_[0];
+    post_minfo.use_model_shape_out = use_model_shape_[1];
 
-    post_model_info.num_out_featuremaps = post_info_model->get_output_sizes().size();
+    post_minfo.num_out_featuremaps = pp_post->get_output_sizes().size();
 
-    for(int op = 0; op < post_model_info.num_out_featuremaps ; ++op) {
-        if(post_out_size.size() == 0) { //Post model sizes are not given by the user so we get the sizes from post info
-            std::vector<int64_t>output_shape = post_info_model->get_output_shapes()[op];
+    for (int op = 0; op < post_minfo.num_out_featuremaps; ++op) {
+        if (post_out_size_.size() == 0) {  // Post model sizes are not given by the user so we get the
+            // sizes from post info
+            std::vector<int64_t> output_shape = pp_post->get_output_shapes()[op];
             MX::Types::ShapeVector featureMap_shape(static_cast<int>(output_shape.size()));
-            for(int i = 0 ; i < static_cast<int>(output_shape.size()); ++i) {
+            for (int i = 0; i < static_cast<int>(output_shape.size()); ++i) {
                 featureMap_shape[i] = output_shape[i];
             }
-            post_model_info.out_featuremap_sizes.push_back(post_info_model->get_output_sizes()[op]);
-            post_model_info.output_layer_names.push_back(post_info_model->get_output_names()[op]);
-            post_model_info.out_featuremap_shapes.push_back(featureMap_shape);
+            post_minfo.out_featuremap_sizes.push_back(pp_post->get_output_sizes()[op]);
+            post_minfo.output_layer_names.push_back(pp_post->get_output_names()[op]);
+            post_minfo.out_featuremap_shapes.push_back(featureMap_shape);
         }
 
         else {
-            post_model_info.out_featuremap_sizes.push_back(post_out_size[op]);
+            post_minfo.out_featuremap_sizes.push_back(post_out_size_[op]);
         }
-
     }
 
-    //In the case of dfp output and post inputs not matching in terms of order or number, we find the matching and
-    //for the direct outputs from the dfp that are not inputs to the post-model, we keep their names so that
-    //they can later be appended to the post-model outputs.
-    for(int i = 0; i < (int)post_info_model->real_featuremaps.size(); ++i) {
-        post_model_info.num_out_featuremaps++;
-        if(post_info_model->type == Plugin_Onnx) {
-            model_info.out_featuremap_shapes[post_info_model->real_featuremaps[i]].set_ch_first();
+    // In the case of dfp output and post inputs not matching in terms of order
+    // or number, we find the matching and for the direct outputs from the dfp
+    // that are not inputs to the post-model, we keep their names so that they
+    // can later be appended to the post-model outputs.
+
+    // NOTE:
+    // The DFP model may output many feature maps, but the post-model may only
+    // take some of them as inputs.
+    //
+    // `real_featuremaps` is a vector of indices. It lists exactly which DFP
+    // outputs the post-model should use — in the correct order.
+    for (int i = 0; i < (int)pp_post->real_featuremaps.size(); ++i) {
+        post_minfo.num_out_featuremaps++;
+        if (pp_post->type == Plugin_Onnx) {
+            minfo.out_featuremap_shapes[pp_post->real_featuremaps[i]].set_ch_first();
         }
 
-        post_model_info.out_featuremap_shapes.push_back(model_info.out_featuremap_shapes[post_info_model->real_featuremaps[i]]);
-        post_model_info.out_featuremap_sizes.push_back(model_info.out_featuremap_sizes[post_info_model->real_featuremaps[i]]);
-        post_model_info.output_layer_names.push_back(model_info.output_layer_names[post_info_model->real_featuremaps[i]]);
+        post_minfo.out_featuremap_shapes.push_back(minfo.out_featuremap_shapes[pp_post->real_featuremaps[i]]);
+        post_minfo.out_featuremap_sizes.push_back(minfo.out_featuremap_sizes[pp_post->real_featuremaps[i]]);
+        post_minfo.output_layer_names.push_back(minfo.output_layer_names[pp_post->real_featuremaps[i]]);
 
-        //printf("\n<<< Post model real output \"%s\" total_size: %lu\n",
-        //       model_info.output_layer_names[post_info_model->real_featuremaps[i]].c_str(),
-        //       model_info.out_featuremap_sizes[post_info_model->real_featuremaps[i]]);
+        // printf("\n<<< Post model real output \"%s\" total_size: %lu\n",
+        //        minfo.output_layer_names[pp_post->real_featuremaps[i]].c_str(),
+        //        minfo.out_featuremap_sizes[pp_post->real_featuremaps[i]]);
     }
 }
 
@@ -276,75 +351,163 @@ void MxModel::model_set_post(std::filesystem::path post_path, const std::vector<
  */
 void MxModel::model_set_pre(std::filesystem::path pre_path)
 {
-    pre_model_path = pre_path;
-    pre_info_model = mx_create_prepost(pre_model_path);
-    pre_info_model->match_names(model_info.input_layer_names, Process_Pre);
+    pre_model_path_ = pre_path;
+    pp_pre = mx_create_prepost(pre_model_path_);
+    pp_pre->match_names(minfo.input_layer_names, Process_Pre);
 
-    pre_model_info.num_in_featuremaps = pre_info_model->get_input_sizes().size();
-    for(int ip = 0; ip < pre_model_info.num_in_featuremaps ; ++ip) {
-        std::vector<int64_t>input_shape = pre_info_model->get_input_shapes()[ip];
+    pre_minfo.num_in_featuremaps = pp_pre->get_input_sizes().size();
+
+    for (int ip = 0; ip < pre_minfo.num_in_featuremaps; ++ip) {
+        std::vector<int64_t> input_shape = pp_pre->get_input_shapes()[ip];
+
         MX::Types::ShapeVector featureMap_shape(static_cast<int>(input_shape.size()));
-        for(int i = 0 ; i < static_cast<int>(input_shape.size()); ++i) {
+
+        for (int i = 0; i < static_cast<int>(input_shape.size()); ++i) {
             featureMap_shape[i] = input_shape[i];
         }
-        pre_model_info.in_featuremap_shapes.push_back(featureMap_shape);
-        pre_model_info.in_featuremap_sizes.push_back(pre_info_model->get_input_sizes()[ip]);
-        pre_model_info.input_layer_names.push_back(pre_info_model->get_input_names()[ip]);
 
-        //// printf all the pre_model_info data
-        //printf("\n>> Pre layer \"%s\" total_size: %lu\n", pre_info_model->get_input_names()[ip].c_str(), pre_info_model->get_input_sizes()[ip]);
+        pre_minfo.in_featuremap_shapes.push_back(featureMap_shape);
+        pre_minfo.in_featuremap_sizes.push_back(pp_pre->get_input_sizes()[ip]);
+        pre_minfo.input_layer_names.push_back(pp_pre->get_input_names()[ip]);
 
+        //// printf all the pre_minfo data
+        // printf("\n>> Pre layer \"%s\" total_size: %lu\n",
+        // pp_pre->get_input_names()[ip].c_str(),
+        // pp_pre->get_input_sizes()[ip]);
     }
-    pre_model_info.num_out_featuremaps = model_info.num_in_featuremaps;
-    pre_model_info.out_featuremap_shapes = model_info.in_featuremap_shapes;
-    pre_model_info.out_featuremap_sizes = model_info.in_featuremap_sizes;
-    pre_model_info.output_layer_names = model_info.input_layer_names;
+    pre_minfo.num_out_featuremaps = minfo.num_in_featuremaps;
+    pre_minfo.out_featuremap_shapes = minfo.in_featuremap_shapes;
+    pre_minfo.out_featuremap_sizes = minfo.in_featuremap_sizes;
+    pre_minfo.output_layer_names = minfo.input_layer_names;
 
-    // use_model_shape[0] must be true when using a pre-processing model
-    if(!use_model_shape[0]) {
+    // use_model_shape_[0] must be true when using a pre-processing model
+    if (!use_model_shape_[0]) {
         spdlog::error("Pre-processing model requires use_model_shape.input to be true");
         throw std::runtime_error("Pre-processing model requires use_model_shape.input to be true");
     }
 
-    //printf("\n>> Pre model info: num_in_featuremaps: %d, num_out_featuremaps: %d\n",
-    //       pre_model_info.num_in_featuremaps, pre_model_info.num_out_featuremaps);
+    // printf("\n>> Pre model info: num_in_featuremaps: %d, num_out_featuremaps:
+    // %d\n",
+    //        pre_minfo.num_in_featuremaps,
+    //        pre_minfo.num_out_featuremaps);
 
-    //In the case of dfp input and pre outputs not matching in terms of order or number, we find the matching and
-    //for the direct inputs to the dfp that are not outputs of the pre-model, we keep their names so that
-    //they can later be appended to the MxModel inputs.
-    for(int i = 0; i < (int)pre_info_model->real_featuremaps.size(); ++i) {
-        pre_model_info.num_in_featuremaps++;
-        if(pre_info_model->type == Plugin_Onnx) {
-            model_info.in_featuremap_shapes[pre_info_model->real_featuremaps[i]].set_ch_first();
+    // In the case of dfp input and pre outputs not matching in terms of order
+    // or number, we find the matching and for the direct inputs to the dfp that
+    // are not outputs of the pre-model, we keep their names so that they can
+    // later be appended to the MxModel inputs.
+    for (int i = 0; i < (int)pp_pre->real_featuremaps.size(); ++i) {
+        pre_minfo.num_in_featuremaps++;
+        if (pp_pre->type == Plugin_Onnx) {
+            minfo.in_featuremap_shapes[pp_pre->real_featuremaps[i]].set_ch_first();
         }
 
-        pre_model_info.in_featuremap_shapes.push_back(model_info.in_featuremap_shapes[pre_info_model->real_featuremaps[i]]);
-        pre_model_info.in_featuremap_sizes.push_back(model_info.in_featuremap_sizes[pre_info_model->real_featuremaps[i]]);
-        pre_model_info.input_layer_names.push_back(model_info.input_layer_names[pre_info_model->real_featuremaps[i]]);
+        pre_minfo.in_featuremap_shapes.push_back(minfo.in_featuremap_shapes[pp_pre->real_featuremaps[i]]);
+        pre_minfo.in_featuremap_sizes.push_back(minfo.in_featuremap_sizes[pp_pre->real_featuremaps[i]]);
+        pre_minfo.input_layer_names.push_back(minfo.input_layer_names[pp_pre->real_featuremaps[i]]);
 
-        //printf("\n>>> Pre model real input \"%s\" total_size: %lu\n",
-        //       model_info.input_layer_names[pre_info_model->real_featuremaps[i]].c_str(),
-        //       model_info.in_featuremap_sizes[pre_info_model->real_featuremaps[i]]);
+        // printf("\n>>> Pre model real input \"%s\" total_size: %lu\n",
+        //        minfo.input_layer_names[pp_pre->real_featuremaps[i]].c_str(),
+        //        minfo.in_featuremap_sizes[pp_pre->real_featuremaps[i]]);
     }
 }
 
 void MxModel::set_num_workers(int input_workers, int output_workers)
 {
-    if(input_workers < 0 || output_workers < 0) {
+    if (input_workers < 0 || output_workers < 0) {
         throw logic_error("number of workers must be 0 (auto) or a number >= 1");
     }
-    input_num_workers_ = input_workers;
-    output_num_workers_ = output_workers;
+    in_num_workers_ = input_workers;
+    out_num_workers_ = output_workers;
+}
+
+void MxModel::get_num_workers(int &input_workers, int &output_workers) const
+{
+    input_workers = in_num_workers_;
+    output_workers = out_num_workers_;
 }
 
 void MxModel::set_parallel_fmap_convert(int num_threads)
 {
-    if(num_threads < 2) {
-        parallel_fmap_convert_threads = 1;
+
+    if (num_threads < 2) {
+        parallel_fmap_convert_threads_ = 1;
     }
     else {
-        parallel_fmap_convert_threads = num_threads;
+        parallel_fmap_convert_threads_ = num_threads;
     }
+}
+
+void MxModel::_init_pipeline_vars(bool is_manual)
+{
+    num_stream_done_ = 0;
+    num_in_session_done_ = 0;
+    num_out_session_done_ = 0;
+
+    in_session_done_ = false;
+    out_session_done_ = false;
+    in_loop_done_ = false;
+    out_loop_done_ = false;
+
+    // delete old IO resources if they exist (e.g., when model_start() is called multiple times)
+    _delete_io_resources();
+
+    int num_streams = get_num_streams();
+    
+    // reset sequence number for each stream
+    seq_num_map_.clear();
+    for (int i = 0; i < num_streams; ++i) {
+        seq_num_map_[i] = 0;
+        next_seq_[i] = 0;
+    }
+
+    // ===== Initialize queues and freelists =====
+    // NOTE:
+    // _create_X_item() relies on parallel_fmap_convert_threads, and it might be reset after construction.
+    // So freelist initialization must be done in model_start(), not in the constructor.
+
+    // NOTE: For manual threads, num_streams can be 0, so we enforce a minimum queue size of 2
+    int ifmap_queue_size = max(num_streams * 2, 2);
+    int ofmap_queue_size = max(num_streams * 2, 2);
+
+    ifmap_freelist_ = new BlockyQueue<IomapItem*>(ifmap_queue_size);
+    ofmap_freelist_ = new BlockyQueue<IomapItem*>(ofmap_queue_size);
+
+    // init IomapItem and push into freelist
+    for (int i = 0; i < ifmap_queue_size; i++) {
+        IomapItem* item = _create_in_item();
+        ifmap_freelist_->push(item);
+    }
+    for (int i = 0; i < ofmap_queue_size; i++) {
+        IomapItem* item = _create_out_item();
+        ofmap_freelist_->push(item);
+    }
+
+    if (is_manual) {
+        // Manual mode: do not monitor stream status, so use `model_manual_run` to determine when ifmapQ to stop waiting
+        ifmap_queue_ = new BQExtFlagX<IomapItem*>(ifmap_queue_size, &model_manual_run, false);
+    }
+    else {
+        // Auto thread, in_session monitors if streams are done
+        ifmap_queue_ = new BQExtFlagX<IomapItem*>(ifmap_queue_size, &in_session_done_, true);
+    }
+
+    ofmap_queue_ = new BQExtFlagX<IomapItem*>(ofmap_queue_size, &out_loop_done_, true);
+    inflights_ = new BQExtFlagX<inflightPacket>(UINT_MAX, &in_loop_done_, true);
+}
+
+void MxModel::_determine_num_workers()
+{
+
+    int num_streams = get_num_streams();
+    int num_cpu_cores = std::thread::hardware_concurrency();
+    int num_models = dfp_->get_dfp_meta()->num_models;
+
+    // set default num_workers, num_workers will be adjusted on fly in worker monitor thread
+    int default_num_workers = max(1, min(num_streams, num_cpu_cores / (2 * num_models)));
+    if (in_num_workers_ == 0) 
+        in_num_workers_ = default_num_workers;
+    if (out_num_workers_ == 0) 
+        out_num_workers_ = default_num_workers;
 }
 
 /**
@@ -357,984 +520,870 @@ void MxModel::set_parallel_fmap_convert(int num_threads)
  */
 void MxModel::model_start()
 {
-
-    //Create input vector of featureMaps for all streams
-    for(int i = 0; i < num_streams_; ++i) {
-        create_and_append_in_fm();
-        create_and_append_out_fm();
+    if (get_num_streams() == 0) {
+        spdlog::warn("Model {}: no streams connected. No threads will be started.", model_id_);
+        return;
     }
 
+    // determine number of workers for input/output sessions
+    _determine_num_workers();
 
-    input_thread_counter.store(num_streams_);
+    // init such as ifmap_queue, freelists
+    _init_pipeline_vars(false /* is_manual */);
 
-    for(int i = 0; i < num_streams_; ++i) {
-        out_task_mutex.push_back(new std::mutex);
-        out_task_cv.push_back(new std::condition_variable);
+    // used in input_session, will push and pop frequently
+    for (const auto& [stream_id, task] : stream_task_map_) {
+        input_tasks_->push(task);
     }
 
-    //starting the model by setting the corresponding flags to true
+    // model start running
+    // NOTE: model_run flag must be set before worker monitor thread starts
     model_run.store(true);
-    model_recv_run.store(true);
 
-    //Create and start model threads
-    model_send_thread = new std::thread(&MxModel::model_send_fun, this);
-    model_recv_thread = new std::thread(&MxModel::model_recv_fun, this);
-
-    int num_cpu_cores = std::thread::hardware_concurrency();
-    int num_models = meta_->num_models;
-
-    int default_num_workers = min(num_streams_, num_cpu_cores / (2 * num_models));
-    if(input_num_workers_ == 0 || output_num_workers_ == 0) {
-        input_num_workers_ = default_num_workers;
-        output_num_workers_ = default_num_workers;
-    }
-    if(input_num_workers_ > num_streams_) {
-        input_num_workers_ = num_streams_;
-        std::cout << "Warning!! Input number of workers are set to be more than number of streams. \
-                                \n Default mode is activated and num workers is set to num streams" << std::endl;
-    }
-    if(output_num_workers_ > num_streams_) {
-        output_num_workers_ = num_streams_;
-        std::cout << "Warning!! Output number of workers are set to be more than number of streams. \
-                                \n Default mode is activated and num workers is set to num streams" << std::endl;
+    // start worker monitor thread
+    // 
+    // NOTE:
+    // The monitor thread introduces slight delay during shutdown (especially annoying when running tests)
+    // because it sleeps before exiting, so start it only when necessary.
+    if (in_num_workers_ < get_num_streams()) {
+        // Enter if, this is only case where we need to dynamically adjust workers.
+        worker_monitor_thread_ = new std::thread(&MxModel::_worker_monitor, this);
     }
 
-    //Creating thread pools
-    input_pool = new thread_pool("input_pool", input_num_workers_, true, num_streams_);
-    output_pool = new thread_pool("output_pool", output_num_workers_, false, num_streams_);
+    // start sessions with specified number of workers
+    for (int i = 0; i < in_num_workers_; ++i) {
+        std::thread* th = new std::thread(&MxModel::input_session, this);
+        in_session_threads_.push_back(th);
+    }
+    for (int i = 0; i < out_num_workers_; ++i) {
+        std::thread* th = new std::thread(&MxModel::output_session, this);
+        out_session_threads_.push_back(th);
+    }
 
-    //Creating num_streams_ number of input tasks for each stream
-    for(int i = 0; i < num_streams_; ++i) {
-        vector<const FeatureMap*> temp(in_featuremaps_[i].begin(), in_featuremaps_[i].end());
-        input_pool->submitTask(&MxModel::inputTask, this, comb_in_call[i], std::move(temp), std::move(i), stream_id_list[i]);
+    // start loops (one thread per loop)
+    // 
+    // NOTE: Each loop must run on a single thread. 
+    // If, for any reason in the future, multiple threads are used, 
+    // FMAP synchronization must be handled explicitly to ensure
+    // send/receive FMAP in order.
+    in_loop_thread_ = new std::thread(&MxModel::input_loop, this);
+    out_loop_thread_ = new std::thread(&MxModel::output_loop, this);
+}
+
+/*
+ * Monitors worker threads and dynamically adjusts the worker count.
+ * If all workers are idle, it spawns an additional worker (up to the number of streams)
+ * to avoid deadlock.
+ *
+ * Note: A stream can become idle. For example, in a multi-stage pipeline
+ * (e.g., car detection -> plate OCR), a stream may receive no plates
+ * for several consecutive frames.
+ * 
+ * See this PR for detail:
+ * https://github.com/memryx/MX_API/pull/281
+ */
+void MxModel::_worker_monitor()
+{
+    const auto idle_thres = std::chrono::seconds(3);
+    int num_streams = get_num_streams();
+
+    while (model_run.load() && !in_session_done_.load()) {
+        int num_idle = 0;
+        auto now = std::chrono::steady_clock::now();
+            
+        for (const auto& [id, start] : stream_timer_.get_all_pairs()) {
+            if (now - start > idle_thres) { 
+                num_idle++;
+            }
+        }
+
+        // Maximum number of workers is capped by the number of streams
+        // 
+        // NOTE: We only spawn extra workers for the input session.
+        // The output session should not be blocked. If it is blocked, it likely means
+        // the output callback has entered a busy loop, which should not happen.
+        if (num_idle == in_num_workers_ && in_num_workers_ < num_streams) {
+            // spawn extra in session worker
+            in_num_workers_++;
+            spdlog::debug("[Model {}][Worker Monitor]: Detected {} idle workers, spawning an extra in session worker thread", model_id_, num_idle);
+            std::thread* th = new std::thread(&MxModel::input_session, this);
+            in_session_threads_.push_back(th);
+        }
+        
+        // avoid busy looping
+        std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 }
 
-//Helper function that copies user input to apt internal featuremap as will be used both in manual and auto functions.
-void MxModel::_pre_copy(int stream)
+// Helper function that runs the inference on the pre-processing model
+void MxModel::_pre_inference(IomapItem* item)
 {
-    if(pre_model[stream]->type == Plugin_Onnx) {
-        for(int i = 0; i < (int)pre_info_model->real_featuremaps.size(); ++i) {
-            pre_in_featuremaps_[stream].push_back(transposed_in_featuremaps_[stream][pre_info_model->real_featuremaps[i]]);
-        }
+    // pre plugin run inference
+    vector<FeatureMap*> permuted_output;
+    for (int i = 0; i < (int)pp_pre->dfp_pattern.size(); ++i) {
+        permuted_output.push_back(item->t_ifmaps[pp_pre->dfp_pattern[i]]);
     }
-    else {
-        for(int i = 0; i < (int)pre_info_model->real_featuremaps.size(); ++i) {
-            pre_in_featuremaps_[stream].push_back(in_featuremaps_[stream][pre_info_model->real_featuremaps[i]]);
-        }
+
+    // pre plugin run inference
+    // input: item->pre_ifmaps
+    // output: permuted_output
+    item->pre_model->runinference(item->pre_ifmaps, permuted_output);
+
+    // t_ifmaps -> ifmaps
+    for (int i = 0; i < minfo.num_in_featuremaps; ++i) {
+        item->ifmaps[i]->set_data_force_foldedops((float*)item->t_ifmaps[i]->get_data_ptr(), true);
     }
 }
 
-//Helper function that runs the inference on the pre-processing model
-void MxModel::_pre_inference(int stream)
+// Helper function that runs the inference on the post-processing model
+void MxModel::_post_inference(IomapItem* item)
 {
-    vector<FeatureMap*> premuted_output;
-    if(pre_model[stream]->type==Plugin_Onnx){//In case of onnx we perform NCHW->NHWC conversion
-        for(int i =0;i<(int)pre_info_model->dfp_pattern.size();++i){
-            premuted_output.push_back(transposed_in_featuremaps_[stream][pre_info_model->dfp_pattern[i]]);
-        }
-        pre_model[stream]->runinference(pre_in_featuremaps_[stream],premuted_output);
-        for(int i=0; i<model_info.num_in_featuremaps;++i){
-            in_featuremaps_[stream][i]->set_data_force_tpose((float*)transposed_in_featuremaps_[stream][i]->get_data_ptr(), true);
+    int stream = item->stream_id;
+
+    // ofmaps -> t_ofmaps
+    // Notice this path forces a transpose. That's the reason
+    // `use_model_shape_[1]` must be true when given a post-model.
+    for (int i = 0; i < minfo.num_out_featuremaps; ++i) {
+        item->ofmaps[i]->get_data_force_foldedops((float*)item->t_ofmaps[i]->get_data_ptr(), true);
+    }
+
+    // In case of dynamic output we initiate the data with zeros as it is
+    // possible that the actual output is smaller than allocated featuremap
+    if (item->post_model->dynamic_output) {
+        for (int m = 0; m < static_cast<int>(post_out_size_.size()); ++m) {
+            memset(item->post_ofmaps[m]->get_data_ptr(), 0, post_out_size_[m] * sizeof(float));
         }
     }
-    else{
-        for(int i =0;i<(int)pre_info_model->dfp_pattern.size();++i){
-            premuted_output.push_back(in_featuremaps_[stream][pre_info_model->dfp_pattern[i]]);
-        }
-        pre_model[stream]->runinference(pre_in_featuremaps_[stream],premuted_output);
+
+    // post plugin run inference
+    std::vector<FeatureMap*> permuted_output;
+    for (int i = 0; i < (int)pp_post->dfp_pattern.size(); ++i) {
+        permuted_output.push_back(item->t_ofmaps[pp_post->dfp_pattern[i]]);
+    }
+
+    // IO for post model
+    // input: permuted_output
+    // output: item->post_ofmaps
+    item->post_model->runinference(permuted_output, item->post_ofmaps);
+
+    // t_ofmaps -> post_ofmaps ()
+    // FIXME: this section apparently has a bug. item->post_ofmaps should not keep push_back each time
+    for (int i = 0; i < (int)pp_post->real_featuremaps.size(); ++i) {
+        item->t_ofmaps[pp_post->real_featuremaps[i]]->fm_type = FM_POST;
+        item->post_ofmaps.push_back(item->t_ofmaps[pp_post->real_featuremaps[i]]);
     }
 }
 
-
-//Helper function that runs the inference on the post-processing model
-void MxModel::_post_inference(int stream)
+// The actual task sent to input threadpools
+void MxModel::input_session()
 {
-    std::vector<FeatureMap*> premuted_output;
-    if(post_model[stream]->type == Plugin_Onnx){
-        for(int i=0; i< model_info.num_out_featuremaps; ++i){
-            out_featuremaps_[stream][i]->get_data_force_tpose((float*)transposed_out_featuremaps_[stream][i]->get_data_ptr(), true);
-        }
-        if(post_model[stream]->dynamic_output){//In case of dynamic output we initiate the data with zeros as it is possible that the actual output is smaller than allocated featuremap
-            for(int m =0 ;m < static_cast<int>(post_out_size.size());++m)
-            memset(post_out_featuremaps_[stream][m]->get_data_ptr(),0,post_out_size[m]*sizeof(float));
-        }
-        for(int i =0; i< (int)post_info_model->dfp_pattern.size();++i){
-            premuted_output.push_back(transposed_out_featuremaps_[stream][post_info_model->dfp_pattern[i]]);
-        }
-        post_model[stream]->runinference(premuted_output,post_out_featuremaps_[stream]);
-        for(int i =0; i< (int)post_info_model->real_featuremaps.size();++i){
-            transposed_out_featuremaps_[stream][post_info_model->real_featuremaps[i]]->fm_type = FM_POST;
-            post_out_featuremaps_[stream].push_back(transposed_out_featuremaps_[stream][post_info_model->real_featuremaps[i]]);
-        }
-    }
-    else{
-        if(post_model[stream]->dynamic_output){
-            for(int m =0 ;m < static_cast<int>(post_out_size.size());++m)
-            memset(post_out_featuremaps_[stream][m]->get_data_ptr(),0,post_out_size[m]*sizeof(float));
-        }
-        for(int i =0; i< (int)post_info_model->dfp_pattern.size();++i){
-            premuted_output.push_back(out_featuremaps_[stream][post_info_model->dfp_pattern[i]]);
-        }
-        post_model[stream]->runinference(premuted_output,post_out_featuremaps_[stream]);
-        for(int i =0; i< (int)post_info_model->real_featuremaps.size();++i){
-            post_out_featuremaps_[stream].push_back(out_featuremaps_[stream][post_info_model->real_featuremaps[i]]);
-        }
-    }
+#ifdef GDB_DEBUG
+    std::cout << "input_session tid = " << std::hex << "0x" << (uintptr_t)pthread_self() << std::dec << std::endl;
+#endif
 
+    StreamTask* task = nullptr;
 
-    //// NOTE: get_data will be set to always use_model_shape=true for connected post models
-    //std::vector<FeatureMap*> permuted_output;
-    //for(int i = 0; i < model_info.num_out_featuremaps; ++i) {
-    //    // This line takes out_featuremaps_ and does the use_model_shape transformations, and stores
-    //    // the results directly in the float array of out_featuremaps_pptemp_
-    //    out_featuremaps_[stream][i]->get_data(out_featuremaps_pptemp_[stream][i]->get_data_ptr());
-    //}
-    //if(post_model[stream]->dynamic_output) { //In case of dynamic output we initiate the data with zeros as it is possible that the actual output is smaller than allocated featuremap
-    //    for(int m = 0 ; m < static_cast<int>(post_out_size.size()); ++m) {
-    //        memset(post_out_featuremaps_[stream][m]->get_data_ptr(), 0, post_out_size[m]*sizeof(float));
-    //    }
-    //}
-    //// now re-order the out_featuremaps_pptemp_ list according to the dfp_pattern order
-    //for(int i = 0; i < (int)post_info_model->dfp_pattern.size(); ++i) {
-    //    permuted_output.push_back(out_featuremaps_pptemp_[stream][post_info_model->dfp_pattern[i]]);
-    //}
+    for (;;) {
 
-    //// print the size and member shapes of permuted_output, and a sample of their data
-    ////printf("permuted_output size: %d\n", (int)permuted_output.size());
-    ////// print a sample of the data
-    ////printf("Sample data for permuted_output[%d]: ", 0);
-    ////for(int j = 0; j < 10; ++j) {
-    ////    printf("%f ", permuted_output[0]->get_data_ptr()[j]);
-    ////}
-    ////printf("\n");
-    ////printf("Sample data for permuted_output[%d]: ", 1);
-    ////for(int j = 0; j < 10; ++j) {
-    ////    printf("%f ", permuted_output[1]->get_data_ptr()[j]);
-    ////}
-    ////printf("\n");
+        // get the next stream task
+        if (input_tasks_->pop(task) == false) {
+            spdlog::debug("[Model {}][input session]: thread done due to input_tasks is empty", model_id_);
+            break;
+        }
 
-    //// finally do the post model inference
-    ////printf("About to runinference on post model for stream %d with %d featuremap permuted_output\n", stream, (int)permuted_output.size());
-    //post_model[stream]->runinference(permuted_output, post_out_featuremaps_[stream]);
-    ////printf("real_featuremaps size: %d\n", (int)post_info_model->real_featuremaps.size());
-    //for(int i = 0; i < (int)post_info_model->real_featuremaps.size(); ++i) {
-    //    // set the type to FM_POST, so we know not to touch anything in the array before returning to the user
-    //    out_featuremaps_pptemp_[stream][post_info_model->real_featuremaps[i]]->fm_type = FM_POST;
-    //    post_out_featuremaps_[stream].push_back(out_featuremaps_pptemp_[stream][post_info_model->real_featuremaps[i]]);
-    //}
+        int stream_id = task->id;
 
-    ////// print some of the post_out_featuremaps_[stream] data
-    ////printf("post_out_featuremaps_[%d] size: %d\n", stream, (int)post_out_featuremaps_[stream].size());
-    ////for(int i = 0; i < (int)post_out_featuremaps_[stream].size(); ++i) {
-    ////    printf("Sample data for post_out_featuremaps_[%d][%d]: ", stream, i);
-    ////    for(int j = 0; j < 1; ++j) {
-    ////        printf("%f ", post_out_featuremaps_[stream][i]->get_data_ptr()[j]);
-    ////    }
-    ////    printf("\n");
-    ////}
+        // checkout a IomapItem from freelist
+        IomapItem* item = ifmap_freelist_->pop();
+        item->stream_id = stream_id;  // set stream_id
 
-}
+        spdlog::debug("[Model {}][input_session]: run input callback for stream {}", model_id_, stream_id);
 
-//The actual task sent to input threadpools
-bool MxModel::inputTask(combined_input_callback_t in_cb, vector<const FeatureMap*>inputs, int stream, int stream_idx)
-{
-    if(in_featuremaps_[stream][0]->get_in_ready()) {
-        bool send_flag = false;
-        if(!pre_model_path.empty()) {
-            _pre_copy(stream);
-            vector<const FeatureMap*> temp(pre_in_featuremaps_[stream].begin(), pre_in_featuremaps_[stream].end());
-            send_flag = in_cb(temp, stream_idx);
-            _pre_inference(stream);
+        bool stream_continue;
+        stream_timer_.update(stream_id, std::chrono::steady_clock::now()); // update stream timer
+        if (!pre_model_path_.empty()) {
+
+            // TODO: implement _pre_copy
+            // _pre_copy()
+
+            // call app's input callback
+            stream_continue = task->in_cb(item->pre_c_ifmaps, stream_id);
+
+            // infer with pre model
+            _pre_inference(item);
         }
         else {
-            send_flag = in_cb(inputs, stream_idx);
+            // call app's input callback
+            stream_continue = task->in_cb(item->c_ifmaps, stream_id);
         }
 
-        //Once the input callback is done, set the in_ready flag to false so that next inference is blocked on this stream
-        //till MPU inference is done
-        in_featuremaps_[stream][0]->set_in_ready(false);
-        if(!send_flag) {
-            return false;
-        }
-        stream_queue.push(stream);
-        input_thread_counter--;//Decrement the input thread counter so that new tasks can be sent to the input threadpool
-        //till there is a free worker.
-        {
-            std::lock_guard lock(input_task_mutex);
-            input_task_flag = true;
-            input_task_cv.notify_one();
-        }
-    }
-    else {
-        //spdlog::warn("[MxModel] [ctx {}] Input task called when input is not ready. Ignoring the call", model_id_);
-        std::unique_lock lock(input_thread_mutex);
-        auto now = std::chrono::steady_clock::now();
-        input_thread_cv.wait_until(lock, now + INPUT_TASK_TIMEOUT, [this]() { return (this->input_thread_counter.load() > 0); }); //Wait for model thread to be done
-    }
-    return true;
-}
+        if (model_run.load() && stream_continue) {            
+            // CRITICAL NOTE: 
+            // 
+            // Push data to ifmapQ BEFORE requeuing the task.
+            // 
+            // This prevents a race condition where a second thread picks up the task, 
+            // finishes the stream(stream_continue is FALSE) , and triggers a shutdown
+            // while this thread is still pushing the current item -- this item will be lost and never processed
+            ifmap_queue_->push(item);
 
-//The actual task sent to output threadpools
-bool MxModel::outputTask(combined_output_callback_t out_cb, vector<const FeatureMap*>outputs, int stream, int stream_idx)
-{
-    if(!post_model_path_.empty()) {
-        _post_inference(stream);
-        vector<const FeatureMap*> temp(post_out_featuremaps_[stream].begin(),post_out_featuremaps_[stream].end());
-        out_cb(temp,stream_idx);
-        for(int i =0; i< (int)post_info_model->real_featuremaps.size();++i){
-            transposed_out_featuremaps_[stream][post_info_model->real_featuremaps[i]]->fm_type = FM_DFP;
+            // Requeue the stream task for continuous input
+            // NOTE:
+            // task push should lies the bottom of the section of stream_continue == true
+            input_tasks_->push(task); 
+        }
+        else {
+            num_stream_done_++;
+
+            // check if all streams are done
+            if (num_stream_done_.load() == get_num_streams()) {
+                spdlog::debug("[Model {}][input_session]: all streams are done", model_id_);
+
+                // this flag has to be set true before notify
+                in_session_done_.store(true);
+
+                // notify
+                input_tasks_->notify();
+                ifmap_queue_->notify();
+
+                break;
+            }
         }
     }
-    else {
-        out_cb(outputs, stream_idx);
+
+    // done
+}
+
+void MxModel::input_loop()
+{
+#ifdef GDB_DEBUG
+    std::cout << "input_loop tid = " << std::hex << "0x" << (uintptr_t)pthread_self() << std::dec << std::endl;
+#endif
+
+    IomapItem* item = nullptr;
+    for (;;) {
+
+        // get next input IomapItem
+        if (ifmap_queue_->pop(item) == false) {
+            spdlog::debug("[Model {}][input loop]: thread done due to ifmap_queue is empty", model_id_);
+            break;
+        }
+
+        inflightPacket packet;
+        packet.stream_id = item->stream_id;
+
+        // send input data to mxa chip
+        if (local_mode_) {
+
+            int ctx_infer = open_contexts_.at(ctx_infer_idx);
+            packet.ctx_infer = ctx_infer;
+
+            // Sending inputs to MPU in local mode
+            memx_status status;
+            for (int i = 0; i < static_cast<int>(in_ports_.size()); ++i) {
+                status = memx_stream_ifmap(ctx_infer, in_ports_[i], item->ifmaps[i]->get_formatted_data(), 0 /* timeout */);
+                if (memx_status_error(status)) {
+                    throw runtime_error("stream_ifmap failed, try resetting the MXA");
+                }
+            }
+
+            // FIXME: this is some sussy code for load-balancing.....
+            // update ctx_infer idx
+            ctx_infer_idx = (ctx_infer_idx + 1) % open_contexts_.size();
+
+        }
+        else {
+
+            // Sending inputs to mxa-manager
+            for (int i = 0; i < static_cast<int>(in_ports_.size()); ++i) {
+                if (client_->send(item->ifmaps[i]->get_formatted_data(), item->ifmaps[i]->get_formatted_size()) == false) {
+                    throw runtime_error("Error in sending data to mxa-manager");
+                }
+            }
+        }
+
+        // push this frame's packet to the inflight tracker
+        inflights_->push(packet);
+
+        spdlog::debug("[Model {}][input_loop]: pushed stream {} item to inflights tracker", model_id_, item->stream_id);
+
+        // return this IomapItem to the ifmap freelist
+        ifmap_freelist_->push(item);
     }
-    {
-        //Once the output callback is done, set the out_ready flag to true so that next inference will start in model_recv_thread on this stream
-        std::lock_guard<std::mutex> lock(*out_task_mutex[stream]);
-        out_featuremaps_[stream][0]->set_out_ready(true);
+
+    // done
+    spdlog::debug("Model {}: input loop thread done", model_id_);
+    in_loop_done_.store(true);
+    inflights_->notify();
+}
+
+void MxModel::output_loop()
+{
+#ifdef GDB_DEBUG
+    std::cout << "output_loop tid = " << std::hex << "0x" << (uintptr_t)pthread_self() << std::dec << std::endl;
+#endif
+
+    IomapItem* item = nullptr;
+
+    for (;;) {
+
+        inflightPacket packet;
+
+        // get the next completed frame's packet from inflights tracker
+        if (inflights_->pop(packet) == false) {
+            spdlog::debug("Model {}: output loop thread done due to inflights "
+                          "tracker is empty",
+                          model_id_);
+            break;
+        }
+
+        int stream_id = packet.stream_id;
+        int ctx_infer = packet.ctx_infer;
+
+        spdlog::debug("[Model {}][output_loop]: got data from inflights of stream {}", model_id_, stream_id);
+
+        // checkout a IomapItem from ofmap freelist
+        ofmap_freelist_->pop(item);
+        item->stream_id = stream_id;  // reset stream_id
+
+        // NOTE: only single thread for output_loop, so no need for lock here accessing seq_num_map_
+        // set sequence number for this item, which will be used in post-processing and output callback to ensure the order of frames
+        item->seq_num = seq_num_map_[stream_id];
+        seq_num_map_[stream_id]++;
+
+        if (local_mode_) {
+
+            memx_status status;
+            for (int i = 0; i < static_cast<int>(out_ports_.size()); ++i) {
+                status = memx_stream_ofmap(ctx_infer, out_ports_[i], item->ofmaps[i]->get_formatted_data(), 0 /* timeout */);
+                if (memx_status_error(status)) {
+                    throw runtime_error("stream_ofmap failed, try resetting the MXA");
+                }
+            }
+        }
+        else {
+
+            // receive output data from server
+            for (int i = 0; i < static_cast<int>(out_ports_.size()); ++i) {
+                if (client_->recv(item->ofmaps[i]->get_formatted_data(), item->ofmaps[i]->get_formatted_size()) == false) {
+                    throw runtime_error("Error in receving data from mxa-manager");
+                }
+            }
+        }
+
+        // push this frame's IomapItem to ofmap queue
+        ofmap_queue_->push(item);
+
+        spdlog::debug("[Model {}][output_loop]: pushed stream {} item to ofmap queue", model_id_, stream_id);
     }
-    out_task_cv[stream]->notify_one();
-    return true;
+
+    // done
+    spdlog::debug("Model {}: output loop thread done", model_id_);
+    out_loop_done_.store(true);
+    ofmap_queue_->notify();
 }
 
-void MxModel::create_append_manual_mem()
+// The actual task sent to output threadpools
+void MxModel::output_session()
 {
-    manual_recv_mutex.push_back(new std::mutex);
-    manual_recv_cv.push_back(new std::condition_variable);
-    manual_recv_task_mutex.push_back(new std::mutex);
-    manual_recv_task_cv.push_back(new std::condition_variable);
+#ifdef GDB_DEBUG
+    std::cout << "output_session tid = " << std::hex << "0x" << (uintptr_t)pthread_self() << std::dec << std::endl;
+#endif
+
+    for (;;) {
+
+        IomapItem* item = nullptr;
+
+        // get the next output IomapItem
+        if (ofmap_queue_->pop(item) == false) {
+            spdlog::debug("Model {}: output session thread done due to ofmap_queue is empty", model_id_);
+            break;
+        }
+
+        // post-processing inference if post model is connected
+        if (!post_model_path_.empty()) {
+            _post_inference(item);
+        }
+
+        int stream_id = item->stream_id;
+        int seq_num = item->seq_num;
+
+        if (seq_num != next_seq_[stream_id].load()) {
+            spdlog::debug("Model {}: stream {} out of order: expected seq_num {}, got seq_num {}", model_id_, stream_id, next_seq_[stream_id].load(), seq_num);
+            // wait until it's turn
+            std::unique_lock<std::mutex> lk(seq_mtxs_[stream_id]);
+            seq_cvs_[stream_id].wait(lk, [&](){ return seq_num == next_seq_[stream_id].load(); });
+        }
+
+        // call app's output callback
+        if (!post_model_path_.empty()) {
+            stream_task_map_[stream_id]->out_cb(item->post_c_ofmaps, stream_id);
+        }
+        else {
+            stream_task_map_[stream_id]->out_cb(item->c_ofmaps, stream_id);
+        }
+
+        // notify next frame of this stream
+        next_seq_[stream_id]++;
+        seq_cvs_[stream_id].notify_all();
+
+        spdlog::debug("[Model {}][output_session]: run out callback for stream {}", model_id_, stream_id);
+
+        // return this IomapItem to the ofmap freelist
+        ofmap_freelist_->push(item);
+    }
+
+
+    // update the number of input sessions done
+    num_out_session_done_++;
+
+    // done
+    if (num_out_session_done_.load() == (int)out_session_threads_.size()) {
+        out_session_done_.store(true);
+        spdlog::debug("Model {}: output session thread done", model_id_);
+    }
 }
 
-// Manual threading model start to init model features and featureMap
-void MxModel::model_manual_start()
+int MxModel::get_num_streams() const
 {
-    // setting the model run flags to false for manual threading // repeating this for sanity
-    model_manual_recv_thread = new std::thread(&MxModel::model_manual_recv_fun, this);
-    model_run.store(false);
-    model_recv_run.store(false);
-    model_manual_run.store(true);
-    out_featuremaps_.reserve(VECTOR_INIT_BUFFER_LEN);
-    in_featuremaps_.reserve(VECTOR_INIT_BUFFER_LEN);
-    post_model.reserve(VECTOR_INIT_BUFFER_LEN);
-    pre_model.reserve(VECTOR_INIT_BUFFER_LEN);
-    post_out_featuremaps_.reserve(VECTOR_INIT_BUFFER_LEN);
-    pre_in_featuremaps_.reserve(VECTOR_INIT_BUFFER_LEN);
-    //in_featuremaps_pptemp_.reserve(VECTOR_INIT_BUFFER_LEN);
-    //out_featuremaps_pptemp_.reserve(VECTOR_INIT_BUFFER_LEN);
-    transposed_in_featuremaps_.reserve(VECTOR_INIT_BUFFER_LEN);
-    transposed_out_featuremaps_.reserve(VECTOR_INIT_BUFFER_LEN);
-    manual_recv_cv.reserve(VECTOR_INIT_BUFFER_LEN);
-    manual_recv_mutex.reserve(VECTOR_INIT_BUFFER_LEN);
-    manual_recv_task_cv.reserve(VECTOR_INIT_BUFFER_LEN);
-    manual_recv_task_mutex.reserve(VECTOR_INIT_BUFFER_LEN);
-}
-
-int MxModel::get_num_streams()
-{
-    return num_streams_;
+    return stream_task_map_.size();
 }
 
 void MxModel::model_wait()
 {
-    if(!model_run.load()) {
-        spdlog::debug("[MxModel] [ctx {}] Model is not running. Cannot wait.", model_id_);
-        return;
+    if (!model_run.load()) {
+        std::string msg = fmt::format("Model {}: must call accl.start() before accl.wait()", model_id_);
+        throw std::logic_error(msg);
     }
-    //Waiting of send stream threads to be done
-    input_pool->wait();
-    spdlog::debug("[MxModel] [ctx {}] wait ends.", model_id_);
+
+    for (auto &th : in_session_threads_) {
+        if (th->joinable()) {
+            th->join();
+        }
+    }
+    for (auto &th : out_session_threads_) {
+        if (th->joinable()) {
+            th->join();
+        }
+    }
+    in_loop_thread_->join();
+    out_loop_thread_->join();
+
+    // in case leftover data in mx chips
+    _drain();
+
+    // mark as not running
+    model_run.store(false);
+    
+    if (worker_monitor_thread_ && worker_monitor_thread_->joinable())
+        worker_monitor_thread_->join();
+
+    spdlog::debug("[MxModel {}] All task finished. model_wait() ends.", model_id_);
 }
 
+void MxModel::_drain() {
+    
+    // NOTE: draining logic for shared mode is implemented in mxa-manager
+
+    if (local_mode_ && model_run.load()) {
+
+        IomapItem* item = nullptr;
+                    
+        // pop item either from ofmap freelist or queue
+        if (ofmap_freelist_->pop_timeout(item, 10 /* timeout */) == false) {
+            ofmap_queue_->pop(item);
+        }
+        
+        // drain all driver contexts
+        for (int ctx : open_contexts_) {
+
+            int num_drained = 0;
+            memx_status status = MEMX_STATUS_OK;
+            while (true) {
+
+                for (int i = 0; i < static_cast<int>(out_ports_.size()); ++i) {
+                    status = (memx_status) ((int)status |  memx_stream_ofmap(ctx, out_ports_[i], item->ofmaps[i]->get_formatted_data(), 100 /* timeout */));
+                }
+
+                if (status != MEMX_STATUS_OK)
+                    break;
+
+                num_drained++;
+            }
+            spdlog::debug("Model {}: Context {} drained {} frames", model_id_, ctx, num_drained);
+        }
+
+        ofmap_freelist_->push(item);
+    }
+}
 void MxModel::model_stop()
 {
-    if(!model_run.load()) {
-        spdlog::debug("[MxModel] [ctx {}] Model is not running. Cannot stop.", model_id_);
-        return;
-    }
-    //Stop signal for model
-    input_pool->stop();
-    model_run.store(false);
-    input_task_cv.notify_one();
-
-    //waiting for model threads to be done
-    model_send_thread->join();
-    //stopping the model recv thread
-    model_recv_run.store(false);
-    model_recv_cv.notify_one();
-    model_recv_thread->join();
-    //Giving the recv stream threads to finish iteration before last iteration
-    for(int i = 0; i < num_streams_; ++i) {
-        while(!out_featuremaps_[i][0]->get_out_ready()) {
-            this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-    }
-    output_pool->stop();
-
-    for(int i = 0; i < num_streams_; ++i) {
-        delete out_task_cv[i];
-        delete out_task_mutex[i];
-    }
-    out_task_cv.clear();
-    out_task_mutex.clear();
-
-    //Flushing the MPU (Sake of sanity and shouldn't be required if everything goes as intended)
-    if(local_mode && num_streams_ > 0) {
-        for(int ctx = 0; ctx < number_of_contexts; ctx++) {
-
-            int context_id = open_contexts.at(ctx);
-            // memx_set_stream_enable(context_id, 0);
-            memx_status status = MEMX_STATUS_OK;
-            while(status == MEMX_STATUS_OK) {
-                for (int i = 0; i < static_cast<int>(out_ports_.size()); ++i) {
-                    uint8_t* temp_blob = new uint8_t[out_featuremaps_[0][i]->get_formatted_size()];
-                    status = (memx_status) ((int)status | memx_stream_ofmap( context_id, out_ports_[i], temp_blob, 100));
-
-                    delete [] temp_blob;
-                    temp_blob = nullptr;
-                }
-            }
-        }
-    }
-
-    delete input_pool;
-    input_pool = nullptr;
-    delete output_pool;
-    output_pool = nullptr;
-    delete model_send_thread;
-    model_send_thread = nullptr;
-    delete model_recv_thread;
-    model_recv_thread = nullptr;
-
-    //Deleting the created featureMaps
-    if(!pre_model_path.empty()) {
-        for(int j = 0; j < num_streams_; ++j) {
-            for(int k = 0; k < static_cast<int>(pre_model[j]->get_input_sizes().size()); ++k) {
-                delete pre_in_featuremaps_[j][k];
-            }
-            delete pre_model[j];
-            pre_model[j] = nullptr;
-            pre_in_featuremaps_[j].clear();
-        }
-        delete pre_info_model;
-        pre_info_model = nullptr;
-        pre_in_featuremaps_.clear();
-    }
-    for (int j = 0; j < num_streams_; ++j) {
-        for (int k = 0; k < static_cast<int>(in_ports_.size()); ++k) {
-            delete in_featuremaps_[j][k];
-            in_featuremaps_[j][k] = nullptr;
-            delete transposed_in_featuremaps_[j][k];
-            transposed_in_featuremaps_[j][k] = nullptr;
-        }
-        in_featuremaps_[j].clear();
-        transposed_in_featuremaps_[j].clear();
-    }
-    in_featuremaps_.clear();
-    transposed_in_featuremaps_.clear();
-    for (int j = 0; j < num_streams_; ++j) {
-        for (int k = 0; k < static_cast<int>(out_ports_.size()); ++k) {
-            delete out_featuremaps_[j][k];
-            out_featuremaps_[j][k] = nullptr;
-            delete transposed_out_featuremaps_[j][k];
-            transposed_out_featuremaps_[j][k] = nullptr;
-        }
-        out_featuremaps_[j].clear();
-        transposed_out_featuremaps_[j].clear();
-    }
-    out_featuremaps_.clear();
-    transposed_out_featuremaps_.clear();
-    if(!post_model_path_.empty()) {
-        for(int j = 0; j < num_streams_; ++j) {
-            for(int k = 0; k < static_cast<int>(post_model[j]->get_output_sizes().size()); ++k) {
-                delete post_out_featuremaps_[j][k];
-            }
-            delete post_model[j];
-            post_model[j] = nullptr;
-            post_out_featuremaps_[j].clear();
-        }
-        delete post_info_model;
-        post_info_model = nullptr;
-        post_out_featuremaps_.clear();
-    }
+    // Do nothing. Keep this function just for backward compatibility.
 }
 
-void MxModel::model_manual_stop()
+MX::Types::MxModelInfo MxModel::get_model_info() const
 {
-    if(!model_manual_run.load()) {
-        spdlog::debug("[MxModel] [ctx {}] Model is not running. Cannot stop.", model_id_);
-        return;
-    }
-    model_manual_run.store(false);
-    model_manual_cv.notify_one();
-    for(int i = 0; i < static_cast<int>(in_featuremaps_.size()); ++i) {
-        manual_recv_cv[i]->notify_one();
-    }
-    model_manual_recv_thread->join();
-    delete model_manual_recv_thread;
-    model_manual_recv_thread = nullptr;
-
-    //Flushing the MPU (Sake of sanity and shouldn't be required if everything goes as intended)
-    if(local_mode && out_featuremaps_.size() > 0) {
-        for(int ctx = 0; ctx < number_of_contexts; ctx++) {
-            int context_id = open_contexts.at(ctx);
-            memx_status status = MEMX_STATUS_OK;
-            while(status == MEMX_STATUS_OK) {
-                for (int i = 0; i < static_cast<int>(out_ports_.size()); ++i) {
-                    uint8_t* temp_blob = new uint8_t[out_featuremaps_[0][i]->get_formatted_size()];
-                    status = (memx_status) ((int)status | memx_stream_ofmap(context_id, out_ports_[i], temp_blob, 100));
-                    delete [] temp_blob;
-                }
-            }
-        }
-    }
-
-    //Deleting the created featureMaps
-    for(int i = 0; i < static_cast<int>(in_featuremaps_.size()); ++i) {
-        for (int k = 0; k < static_cast<int>(in_ports_.size()); ++k) {
-            delete in_featuremaps_[i][k];
-            //delete in_featuremaps_pptemp_[i][k];
-            in_featuremaps_[i][k] = nullptr;
-            //in_featuremaps_pptemp_[i][k] = nullptr;
-        }
-        if(!pre_model_path.empty()) {
-            for(int k = 0; k < static_cast<int>(pre_model[i]->get_input_sizes().size()); ++k) {
-                delete pre_in_featuremaps_[i][k];
-            }
-            delete pre_model[i];
-        }
-    }
-
-    if(!pre_model_path.empty()) {
-        delete pre_info_model;
-        pre_in_featuremaps_.clear();
-    }
-
-    transposed_in_featuremaps_.clear();
-    //in_featuremaps_pptemp_.clear();
-    in_featuremaps_.clear();
-
-    for(int i = 0; i < static_cast<int>(out_featuremaps_.size()); ++i) {
-        for (int k = 0; k < static_cast<int>(out_ports_.size()); ++k) {
-            delete out_featuremaps_[i][k];
-            //delete out_featuremaps_pptemp_[i][k];
-            delete transposed_out_featuremaps_[i][k];
-            out_featuremaps_[i][k] = nullptr;
-            //out_featuremaps_pptemp_[i][k] = nullptr;
-            transposed_out_featuremaps_[i][k] = nullptr;
-        }
-        delete manual_recv_cv[i];
-        delete manual_recv_mutex[i];
-        delete manual_recv_task_cv[i];
-        delete manual_recv_task_mutex[i];
-    }
-
-    if(!post_model_path_.empty()) {
-        for(int i = 0; i < static_cast<int>(post_model.size()); ++i) {
-            for(int k = 0; k < static_cast<int>(post_model[i]->get_output_sizes().size()); ++k) {
-                delete post_out_featuremaps_[i][k];
-            }
-            delete post_model[i];
-        }
-    }
-
-    transposed_out_featuremaps_.clear();
-    //out_featuremaps_pptemp_.clear();
-    out_featuremaps_.clear();
-
-    if(!post_model_path_.empty()) {
-        delete post_info_model;
-        post_out_featuremaps_.clear();
-    }
+    return this->minfo;
 }
 
-// FYI This is a test function and will be removed
-// void MxModel::log_model_info(){
-//     std::cout<<"\n******** Model Index : "<<model_info.model_index<<" ********\n";
-//     std::cout<<"\nNum of in featureMaps : "<<model_info.num_in_featuremaps<<"\n";
-
-//     std::cout<<"\nIn featureMap Shapes \n";
-//     for(int i =0; i<model_info.num_in_featuremaps ; ++i){
-//         std::cout<<"Shape of featureMap : "<<i+1<<"\n";
-//         std::cout<<"Layer Name : "<<model_info.input_layer_names[i]<<"\n";
-//         std::cout<<"H = "<<model_info.in_featuremap_shapes[i][0]<<"\n";
-//         std::cout<<"W = "<<model_info.in_featuremap_shapes[i][1]<<"\n";
-//         std::cout<<"Z = "<<model_info.in_featuremap_shapes[i][2]<<"\n";
-//         std::cout<<"C = "<<model_info.in_featuremap_shapes[i][3]<<"\n";
-//     }
-
-//     std::cout<<"\n\nNum of out featureMaps : "<<model_info.num_out_featuremaps<<"\n";
-//     std::cout<<"\nOut featureMap Shapes \n";
-//     for(int i =0; i<model_info.num_out_featuremaps ; ++i){
-//         std::cout<<"Shape of featureMap : "<<i+1<<"\n";
-//         std::cout<<"Layer Name : "<<model_info.output_layer_names[i]<<"\n";
-//         std::cout<<"H = "<<model_info.out_featuremap_shapes[i][0]<<"\n";
-//         std::cout<<"W = "<<model_info.out_featuremap_shapes[i][1]<<"\n";
-//         std::cout<<"Z = "<<model_info.out_featuremap_shapes[i][2]<<"\n";
-//         std::cout<<"C = "<<model_info.out_featuremap_shapes[i][3]<<"\n";
-//     }
-// }
-
-MX::Types::MxModelInfo MxModel::return_model_info()
+MX::Types::MxModelInfo MxModel::get_pre_model_info() const
 {
-    return this->model_info;
+    return this->pre_minfo;
 }
 
-MX::Types::MxModelInfo MxModel::return_pre_model_info()
+MX::Types::MxModelInfo MxModel::get_post_model_info() const
 {
-    return this->pre_model_info;
+    return this->post_minfo;
 }
 
-MX::Types::MxModelInfo MxModel::return_post_model_info()
-{
-    return this->post_model_info;
-}
-
-void MxModel::_send_wait(int stream)
-{
-    in_featuremaps_[stream][0]->set_in_ready(true);
-    std::lock_guard lock(input_thread_mutex);
-    input_thread_counter++;
-    //Notifying all the input workers waiting so they can perform input callback accordingly
-    input_thread_cv.notify_all();
-}
-
-void MxModel::model_send_fun()
-{
-    //Run till model is running or there are streams left to send to ifmap
-
-    if(local_mode) {
-        while (model_run.load() || stream_queue.size() > 0) {
-            if (stream_queue.size() > 0) {
-                memx_status send_status =  MEMX_STATUS_OTHERS;
-                int stream = stream_queue.pop();
-
-                // FIXME: this is some sussy code for load-balancing.....
-                while(memx_status_error(send_status)) {
-                    int context_to_send = open_contexts.at(context_send_current_index);
-
-                    //Sending inputs to MPU in local mode
-                    for (int i = 0; i < static_cast<int>(in_ports_.size()); ++i) {
-                        send_status = memx_stream_ifmap(context_to_send, in_ports_[i], in_featuremaps_[stream][i]->get_formatted_data(), 0);
-                    }
-
-                    //update context_id every iteration
-                    context_send_current_index = (context_send_current_index + 1) % number_of_contexts;
-
-                    if(memx_status_no_error(send_status)) {
-                        _send_wait(stream);
-
-                        //Push the stream id and context to recv to out_queue right after sending it to ifmap
-                        pair_stream_context_queue.push(std::make_pair(stream, context_to_send));
-                        std::lock_guard lock(model_recv_mutex);
-                        model_recv_flag = true;
-                        model_recv_cv.notify_one();
-                        break;
-                    }
-                }
-            }
-            else {
-                //Wait for one of the streams to notify that they're done with input callback
-                //spdlog::debug("[MxModel-send] [ctx {}] ifmap send_fun has empty stream queue. Thread goes into wait state.", model_id_);
-                std::unique_lock<std::mutex> lock(input_task_mutex);
-                input_task_cv.wait(lock, [this]() { return ((this->input_task_flag || !this->model_run.load())); });
-                input_task_flag = false;
-                lock.unlock();
-                //spdlog::debug("[MxModel-send] [ctx {}] ifmap send_fun wakes up", model_id_);
-            }
-        }
+void MxModel::_delete_io_resources() {
+    while (ifmap_freelist_ && !ifmap_freelist_->empty()) {
+        IomapItem* item = nullptr;
+        ifmap_freelist_->pop(item);
+        delete item;
     }
-    else {
-        while(model_run.load() || stream_queue.size() > 0) {
-            if(stream_queue.size() > 0) {
-                int stream = stream_queue.pop();
-                bool error = false;
-
-                for(int i = 0; i < static_cast<int>(in_ports_.size()); ++i) {
-                    if(client->send(in_featuremaps_[stream][i]->get_formatted_data(), in_featuremaps_[stream][i]->get_formatted_size()) == false) {
-                        error = true;
-                        break;
-                    }
-                }
-
-                if(error) {
-                    spdlog::warn("[MxModel-send] [ctx {}] Error in sending data to server", model_id_);
-                    break;
-                }
-                else {
-                    _send_wait(stream);
-
-                    //Push the stream id and context to recv to out_queue right after sending it to ifmap
-                    pair_stream_context_queue.push(std::make_pair(stream, 0));
-                    std::lock_guard lock(model_recv_mutex);
-                    model_recv_flag = true;
-                    model_recv_cv.notify_one();
-                }
-            }
-            else {
-                //Wait for one of the streams to notify that they're done with input callback
-                std::unique_lock lock(input_task_mutex);
-                input_task_cv.wait(lock, [this]() { return ((this->input_task_flag || !this->model_run.load())); });
-                input_task_flag = false;
-            }
-        }
+    while (ofmap_freelist_ && !ofmap_freelist_->empty()) {
+        IomapItem* item = nullptr;
+        ofmap_freelist_->pop(item);
+        delete item;
     }
+    delete ifmap_freelist_;
+    delete ofmap_freelist_;
+    delete ifmap_queue_;
+    delete ofmap_queue_;
+    delete inflights_;
 
-    model_recv_cv.notify_one();
-}
-
-void MxModel::_recv_wait(int stream)
-{
-    std::unique_lock<std::mutex> lock(*out_task_mutex[stream]);
-    while(!out_featuremaps_[stream][0]->get_out_ready()) {
-        out_task_cv[stream]->wait(lock);
-        // continue;
-    }
-}
-
-void MxModel::model_recv_fun()
-{
-    //Run till model is running or there are streams left to send to ofmap
-    if(local_mode) {
-        while (model_recv_run.load() || pair_stream_context_queue.size() > 0) {
-            if (pair_stream_context_queue.size() > 0) {
-                std::pair<int, int> pop_data = pair_stream_context_queue.pop();
-                int stream = pop_data.first;
-                int context_to_recv = pop_data.second;
-
-                //spdlog::debug("[MxModel-recv] ctx {} in ofmap recv_fun. Pair queue size: {}", context_to_recv, pair_stream_context_queue.size());
-
-                _recv_wait(stream);//If the output callback on this stream is not done, wait fot it to be done
-                for (int i = 0; i < static_cast<int>(out_ports_.size()); ++i) {
-                    memx_status status;
-                    {
-                        status = memx_stream_ofmap(context_to_recv, out_ports_[i], out_featuremaps_[stream][i]->get_formatted_data(), 0);
-                    }
-                    if(memx_status_error(status)) {
-                        throw runtime_error("stream_ofmap failed, try resetting the MXA");
-                    }
-                }
-
-                //Specifing a specific recv stream thread that the ofmap is done
-                out_featuremaps_[stream][0]->set_out_ready(false);
-                vector<const FeatureMap*> temp(out_featuremaps_[stream].begin(), out_featuremaps_[stream].end());
-                output_pool->submitTask(&MxModel::outputTask, this, comb_out_call[stream], std::move(temp), std::move(stream),
-                                        stream_id_list[stream]);
-            }
-            else {
-                //spdlog::debug("[MxModel-recv] [ctx {}] ofmap recv_fun has empty pair queue. Thread goes into wait state.", model_id_);
-                std::unique_lock lock(model_recv_mutex);
-                model_recv_cv.wait(lock, [this]() { return ((this->model_recv_flag || !this->model_run.load())); });
-                model_recv_flag = false;
-                //spdlog::debug("[MxModel-recv] [ctx {}] ofmap recv_fun wakes up", model_id_);
-            }
-        }
-    }
-    else {
-        while(model_recv_run.load() || pair_stream_context_queue.size() > 0) {
-            if(pair_stream_context_queue.size() > 0) {
-                std::pair<int, int> pop_data = pair_stream_context_queue.pop();
-                int stream = pop_data.first;
-
-                bool error = false;
-
-                _recv_wait(stream);//If the output callback on this stream is not done, wait fot it to be done
-                for(int i = 0; i < static_cast<int>(out_ports_.size()); ++i) {
-                    //spdlog::debug("[MxModel-recv] ctx {} in ofmap recv_fun. Pair queue size: {}. out_featuremap size: {}", model_id_, pair_stream_context_queue.size(), out_featuremaps_[stream][i]->get_formatted_size());
-                    if(client->recv(out_featuremaps_[stream][i]->get_formatted_data(), out_featuremaps_[stream][i]->get_formatted_size()) == false) {
-                        error = true;
-                        break;
-                    }
-                }
-
-                if(error) {
-                    spdlog::warn("[MxModel-recv] [ctx {}] Error in receiving data from server", model_id_);
-                    break;
-                }
-                else {
-                    //Specifing a specific recv stream thread that the ofmap is done
-                    out_featuremaps_[stream][0]->set_out_ready(false);
-                    vector<const FeatureMap*> temp(out_featuremaps_[stream].begin(), out_featuremaps_[stream].end());
-                    output_pool->submitTask(&MxModel::outputTask, this, comb_out_call[stream], std::move(temp), std::move(stream),
-                                            stream_id_list[stream]);
-                    //spdlog::debug("[MxModel-recv] [ctr {}] Submitted output task to output pool for stream {}", model_id_, stream);
-                }
-            }
-            else {
-                //spdlog::debug("[MxModel-recv] [ctx {}] ofmap recv_fun has empty pair queue. Thread goes into wait state.", model_id_);
-                std::unique_lock lock(model_recv_mutex);
-                model_recv_cv.wait(lock, [this]() { return ((this->model_recv_flag || !this->model_run.load())); });
-                model_recv_flag = false;
-                //spdlog::debug("[MxModel-recv] [ctx {}] ofmap recv_fun wakes up", model_id_);
-            }
-        }
-    }
+    ifmap_freelist_ = nullptr;
+    ofmap_freelist_ = nullptr;
+    ifmap_queue_ = nullptr;
+    ofmap_queue_ = nullptr;
+    inflights_ = nullptr;
 }
 
 MxModel::~MxModel()
 {
-    //stop the model if destructor is called before calling model_stop
-    if(model_run.load()) {
-        model_stop();
+    spdlog::debug("Model {}: MxModel destructor called", model_id_);
+
+    // mark as not running
+    model_run.store(false);
+    model_manual_run.store(false);
+    
+    // Manual mode not monitor stream status, might get stuck in ifmap_queue->pop() in manual_input_loop
+    if (ifmap_queue_)
+        ifmap_queue_->notify();
+
+    // delete threads
+    for (auto &th : in_session_threads_) {
+        if (th->joinable()) {
+            th->join();
+        }
+        delete th;
     }
-    else if(model_manual_run.load()) {
-        model_manual_stop();
+    for (auto &th : out_session_threads_) {
+        if (th->joinable()) {
+            th->join();
+        }
+        delete th;
     }
+
+    if (in_loop_thread_ && in_loop_thread_->joinable()) {
+        in_loop_thread_->join();
+    }
+    if (out_loop_thread_ && out_loop_thread_->joinable()) {
+        out_loop_thread_->join();
+    }
+    delete in_loop_thread_;
+    delete out_loop_thread_;
+
+    if (worker_monitor_thread_ && worker_monitor_thread_->joinable()) {
+        worker_monitor_thread_->join();
+    }
+    delete worker_monitor_thread_;
+    
+    // in case leftover data in mx chips
+    _drain();
+
+    _delete_io_resources();
+
+    // delete stream tasks
+    for (auto &pair : stream_task_map_) {
+        delete pair.second;
+    }
+    delete input_tasks_;
+
+    // delete result buffer items
+    manual_result_buffer_.clear();
 }
 
-void MxModel::connect_stream(MxModel::combined_input_callback_t in_cb, MxModel::combined_output_callback_t out_cb, int stream_id)
+void MxModel::connect_stream(callback_t in_cb, callback_t out_cb, int stream_id)
 {
-    //Don't connect streams after starting the Model
-    if(model_run.load()) {
+
+    // Disallow connect streams after starting the Model
+    if (model_run.load()) {
         throw logic_error("connect_stream called after starting MxAccl");
     }
-    //Throw an error if either of the callback funtions are nullptr
-    if(in_cb == nullptr || out_cb == nullptr) {
+
+    // Disallow nullptr callbacks
+    if (in_cb == nullptr || out_cb == nullptr) {
         throw invalid_argument("input callback or output callback got a nullptr!");
     }
-    //connect stream only accepts unique stream ids over the Accl
-    auto search = stream_set_.find(stream_id);
-    if(search != stream_set_.end()) {
+
+    // Disallow duplicate stream ids
+    if (stream_task_map_.count(stream_id) > 0) {
         throw invalid_argument("duplicate stream id passed in connect_stream");
     }
-    stream_set_.insert(stream_id);
-    stream_id_list.push_back(stream_id);
-    comb_in_call.push_back(in_cb);
-    comb_out_call.push_back(out_cb);
 
-    num_streams_ += 1;
+    StreamTask* task = new StreamTask(stream_id, in_cb, out_cb);
+
+    stream_task_map_[stream_id] = task;
 }
 
 
-bool MxModel::model_manual_send(std::vector<float*> in_data, int pstream_id, int32_t timeout)
+bool MxModel::all_tasks_done() const
 {
+    return out_session_done_.load();
+}
 
-    if(stream_id_map_.find(pstream_id) == stream_id_map_.end()) {
-        //Check if this call belongs to a new stream or an existing stream
-        lock_guard lock(fm_create_mutex);
-        if(stream_id_map_.find(pstream_id) == stream_id_map_.end()) {
-            //Create and store all the required feature maps and model objects
-            int map_size = stream_id_map_.size();
-            create_and_append_in_fm();
-            create_and_append_out_fm();
-            create_append_manual_mem();
-            stream_id_map_[pstream_id] = map_size;
-            manual_init_cv.notify_all();
+void MxModel::manual_input_loop()
+{
+#ifdef GDB_DEBUG
+    std::cout << "manual_input_loop tid = " << std::hex << "0x" << (uintptr_t)pthread_self() << std::dec << std::endl;
+#endif
+
+    for (;;) {
+
+        IomapItem* item = nullptr;
+
+        // get next input IomapItem
+        if (ifmap_queue_->pop(item) == false) {
+            spdlog::debug("[Model {}][manual_input_loop]: input loop thread done due to ifmap_queue is empty", model_id_);
+            break;
         }
-    }
 
-    // this->out_queue.push(pstream_id);
-    int stream_idx = stream_id_map_[pstream_id];
+        inflightPacket packet;
+        packet.stream_id = item->stream_id;
 
-    if(!pre_model_path.empty()) {
-        for(int i = 0; i < this->pre_model_info.num_in_featuremaps; i++) {
-            // copy data from user to inernal feature map
-            this->pre_in_featuremaps_[stream_idx][i]->set_data(in_data[i]); // transposes if necessary
-        }
-        _pre_inference(stream_idx);
-    }
-    else {
-        for(int i = 0; i < this->model_info.num_in_featuremaps; i++) {
-            // copy data from user to inernal feature map
-            this->in_featuremaps_[stream_idx][i]->set_data(in_data[i]);
-        }
-    }
+        // send input data to mxa chip
+        if (local_mode_) {
 
-    {
-        lock_guard lock(manual_mutex_in);
+            int ctx_infer = open_contexts_.at(ctx_infer_idx);
+            packet.ctx_infer = ctx_infer;
 
-        if(local_mode) {
-            int context_to_send = open_contexts.at(context_send_current_index);
-            for(int i = 0; i < this->model_info.num_in_featuremaps; i++) {
-                memx_status status;
-                status = memx_stream_ifmap(context_to_send, in_ports_[i], this->in_featuremaps_[stream_idx][i]->get_formatted_data(), timeout);
-
-                // if ifmap is success set in ready to true until next set_data is called to copy data from user
-                if(memx_status_error(status)) {
+            // Sending inputs to MPU in local mode
+            memx_status status;
+            for (int i = 0; i < static_cast<int>(in_ports_.size()); ++i) {
+                status = memx_stream_ifmap(ctx_infer, in_ports_[i], item->ifmaps[i]->get_formatted_data(), 0 /* timeout */);
+                if (memx_status_error(status)) {
                     throw runtime_error("stream_ifmap failed, try resetting the MXA");
-                    return false;
                 }
             }
-            context_send_current_index = (context_send_current_index + 1) % number_of_contexts;
-            pair_stream_context_queue.push(std::make_pair(pstream_id, context_to_send));
+
+            // FIXME: this is some sussy code for load-balancing.....
+            // update ctx_infer idx
+            ctx_infer_idx = (ctx_infer_idx + 1) % open_contexts_.size();
+
         }
         else {
-            bool error = false;
-            for(int i = 0; i < this->model_info.num_in_featuremaps; i++) {
-                if(client->send(this->in_featuremaps_[stream_idx][i]->get_formatted_data(),
-                                this->in_featuremaps_[stream_idx][i]->get_formatted_size()) == false) {
-                    error = true;
-                    break;
+            for (int i = 0; i < static_cast<int>(in_ports_.size()); ++i) {
+                if (client_->send(item->ifmaps[i]->get_formatted_data(), item->ifmaps[i]->get_formatted_size()) == false) {
+                    throw runtime_error("Error in sending data to mxa-manager");
                 }
-            }
-            if(error) {
-                spdlog::warn("[MxModel] [ctx {}] Error in sending data to server", model_id_);
-                return false;
-            }
-            else {
-                pair_stream_context_queue.push(std::make_pair(pstream_id, 0));
             }
         }
+
+        // push this frame's packet to the inflight tracker
+        inflights_->push(packet);
+
+        spdlog::debug("[Model {}][manual_input_loop]: pushed stream {} item to inflights tracker", model_id_, item->stream_id);
+
+        // return this IomapItem to the ifmap freelist
+        ifmap_freelist_->push(item);
     }
 
-    {
-        std::lock_guard model_manual_send_lock(manual_mutex);
-        model_manual_in_done = true;
-    }
-    //Notify the model_manual_recv thread
-    model_manual_cv.notify_one();
-    return true;
-
-}
-void MxModel::_manual_recv_wait(int stream_idx)
-{
-    if(!out_featuremaps_[stream_idx][0]->get_out_ready()) {
-        std::unique_lock lock(*manual_recv_mutex[stream_idx]);
-        manual_recv_cv[stream_idx]->wait(lock);
-    }
+    // done
+    spdlog::debug("Model {}: manual input loop thread done", model_id_);
+    in_loop_done_.store(true);
+    inflights_->notify();
 }
 
-void MxModel::model_manual_recv_fun()
+void MxModel::manual_output_loop()
 {
-    //Run till model is running or there are streams left to send to ofmap
-    if(local_mode) {
-        while (model_manual_run.load() || pair_stream_context_queue.size() > 0) {
-            if (pair_stream_context_queue.size() > 0) {
-                std::pair<int, int> pop_data = pair_stream_context_queue.pop();
-                int pstream_id = pop_data.first;
-                int context_to_recv = pop_data.second;
-                int stream_idx = stream_id_map_[pstream_id];
-                _manual_recv_wait(stream_idx);
-                if(!model_manual_run.load()) {
-                    return;
-                }
-                for (int i = 0; i < static_cast<int>(out_ports_.size()); ++i) {
+#ifdef GDB_DEBUG
+    std::cout << "manual_output_loop tid = " << std::hex << "0x" << (uintptr_t)pthread_self() << std::dec << std::endl;
+#endif
 
-                    memx_status status;
-                    status = memx_stream_ofmap(context_to_recv, out_ports_[i], this->out_featuremaps_[stream_idx][i]->get_formatted_data(), 0);
+    for (;;) {
 
-                    if(memx_status_error(status)) {
-                        throw runtime_error("stream_ofmap failed, try resetting the MXA");
-                        break;
-                    }
-                }
+        IomapItem* item = nullptr;
+        inflightPacket packet;
 
-                //Specifing a specific recv stream thread that the ofmap is done
-                out_featuremaps_[stream_idx][0]->set_out_ready(false);
-                {
-                    //Noify the model_manual_recv function to perform the next steps
-                    std::lock_guard lock(*manual_recv_task_mutex[stream_idx]);
-                    manual_recv_task_cv[stream_idx]->notify_one();
+        // get the next completed frame's stream_id from inflights tracker
+        if (inflights_->pop(packet) == false) {
+            spdlog::debug("[Model {}][manual_output_loop]: output loop thread done due to inflights tracker is empty", model_id_);
+            break;
+        }
+
+        int stream_id = packet.stream_id;
+        int ctx_infer = packet.ctx_infer;
+
+        spdlog::debug("[Model {}][manual_output_loop]: got data completed stream {} from inflights tracker", model_id_, stream_id);
+
+        // checkout a IomapItem from ofmap freelist
+        ofmap_freelist_->pop(item);
+        item->stream_id = stream_id;  // reset stream_id
+
+        if (local_mode_) {
+            memx_status status;
+            for (int i = 0; i < static_cast<int>(out_ports_.size()); ++i) {
+                status = memx_stream_ofmap(ctx_infer, out_ports_[i], item->ofmaps[i]->get_formatted_data(), 0 /* timeout */);
+                if (memx_status_error(status)) {
+                    throw runtime_error("stream_ofmap failed, try resetting the MXA");
                 }
-            }
-            else {
-                //Wait for the model_manual_send function to notify
-                std::unique_lock lock(manual_mutex);
-                model_manual_cv.wait(lock, [this]() { return  this->model_manual_in_done || !model_manual_run.load(); });
-                model_manual_in_done = false;
             }
         }
+        else {
+
+            // receive output data from server
+            for (int i = 0; i < static_cast<int>(out_ports_.size()); ++i) {
+                if (client_->recv(item->ofmaps[i]->get_formatted_data(), item->ofmaps[i]->get_formatted_size()) == false) {
+                    throw runtime_error("Error in receving data from mxa-manager");
+                }
+            }
+        }
+
+        // Push this frame's IomapItem into the result buffer for the given
+        // stream_id. NOTE: manual_result_buffer_ is accessed only by the manual
+        // thread.
+        manual_result_buffer_[stream_id]->push(item);
+        spdlog::debug("[Model {}-{}][manual_output_loop]: manual_result_buffer_ size: {}", model_id_, stream_id, manual_result_buffer_[stream_id]->size());
+    }
+
+    // done
+    spdlog::debug("Model {}: manual output loop thread done", model_id_);
+    out_loop_done_.store(true);
+    ofmap_queue_->notify();
+}
+
+void MxModel::_model_manual_start()
+{
+    std::lock_guard<std::mutex> lock(manual_run_mutex);
+
+    if (model_manual_run.load()) {
+        return;
+    }
+
+    // init such as ifmap_queue, freelists
+    _init_pipeline_vars(true /* is_manual */);
+
+    // NOTE: model_manual_run flag must be set before starting manual loops
+    model_manual_run.store(true);
+
+    // start loops (one thread per loop)
+    in_loop_thread_ = new std::thread(&MxModel::manual_input_loop, this);
+    out_loop_thread_ = new std::thread(&MxModel::manual_output_loop, this);
+
+    spdlog::debug("Model {}: manual model start running", model_id_);
+}
+
+bool MxModel::model_manual_send(std::vector<float*> user_ifmaps, int stream_id, int32_t timeout)
+{
+    // start manual model if not started yet
+    _model_manual_start();
+
+    // init result buffer for this stream
+    manual_result_buffer_.init(stream_id);
+
+    IomapItem* item = ifmap_freelist_->pop();
+    item->stream_id = stream_id;  // set stream_id
+
+    spdlog::debug("[Model {}][manual_send]: set data for stream {}", model_id_, stream_id);
+
+    if (!pre_model_path_.empty()) {
+
+        // TODO: implement _pre_copy
+        // _pre_copy()
+
+        // copy data from user to internal `pre` feature map
+        for (int i = 0; i < (int)item->ifmaps.size(); i++) {
+            item->pre_ifmaps[i]->set_data(user_ifmaps[i]);
+        }
+
+        // infer with pre model
+        _pre_inference(item);
     }
     else {
-        while(model_manual_run.load() || pair_stream_context_queue.size() > 0) {
-            if(pair_stream_context_queue.size() > 0) {
-                std::pair<int, int> pop_data = pair_stream_context_queue.pop();
-                int pstream_id = pop_data.first;
-                int stream_idx = stream_id_map_[pstream_id];
-                _manual_recv_wait(stream_idx);
-                if(!model_manual_run.load()) {
-                    return;
-                }
-
-                bool error = false;
-
-                for(int i = 0; i < static_cast<int>(out_ports_.size()); ++i) {
-                    if(client->recv(this->out_featuremaps_[stream_idx][i]->get_formatted_data(),
-                                    this->out_featuremaps_[stream_idx][i]->get_formatted_size()) == false) {
-                        error = true;
-                        break;
-                    }
-                }
-
-                if(error) {
-                    spdlog::warn("[MxModel] [ctx {}] Error in receiving data from server", model_id_);
-                    break;
-                }
-                else {
-                    //Specifing a specific recv stream thread that the ofmap is done
-                    out_featuremaps_[stream_idx][0]->set_out_ready(false);
-                    {
-                        //Noify the model_manual_recv function to perform the next steps
-                        std::lock_guard lock(*manual_recv_task_mutex[stream_idx]);
-                        manual_recv_task_cv[stream_idx]->notify_one();
-                    }
-                }
-            }
-            else {
-                //Wait for the model_manual_send function to notify
-                std::unique_lock lock(manual_mutex);
-                model_manual_cv.wait(lock, [this]() { return  this->model_manual_in_done || !model_manual_run.load(); });
-                model_manual_in_done = false;
-            }
+        // copy data from user to internal feature map
+        for (int i = 0; i < (int)item->ifmaps.size(); i++) {
+            item->ifmaps[i]->set_data(user_ifmaps[i]);
         }
     }
-}
 
-bool MxModel::model_manual_receive(std::vector<float*> &out_data, int pstream_id, int32_t timeout)
-{
-    int stream_idx = 0;
-    while(stream_id_map_.find(pstream_id) == stream_id_map_.end()) {
-        //Wait till input is sent to this particular stream or timeout
-        std::unique_lock lock(manual_init_mutex);
-        if(timeout > 0) {
-            auto cv_timeout = std::chrono::system_clock::now() + std::chrono::seconds(timeout);
-            if(!manual_init_cv.wait_until(lock, cv_timeout, [this, pstream_id] {return stream_id_map_.find(pstream_id) != stream_id_map_.end();})) {
-                return false;
-            }
-        }
-        else {
-            manual_init_cv.wait(lock, [this, pstream_id] {return stream_id_map_.find(pstream_id) != stream_id_map_.end();});
-        }
-        //Sanity sleep
-        std::this_thread::sleep_for(10us);
-    }
-    stream_idx = stream_id_map_[pstream_id];
-    std::chrono::milliseconds timeout_ms(timeout);
-    if(out_featuremaps_[stream_idx][0]->get_out_ready()) {
-        std::unique_lock lock(*(manual_recv_task_mutex[stream_idx]));
-        //Wait till MPU inference of this specific stream is done or return false if timedout
-        if(timeout > 0) {
-            if(!manual_recv_task_cv[stream_idx]->wait_for(lock, timeout_ms, [this, stream_idx] { return !this->out_featuremaps_[stream_idx][0]->get_out_ready(); }))
-                return false;
-        }
-        else {
-            manual_recv_task_cv[stream_idx]->wait(lock);
-        }
-    }
-    if(!post_model_path_.empty()) {
-        _post_inference(stream_idx);
-        for (int i = 0; i < post_model_info.num_out_featuremaps; ++i) {
-            // copy data into user's memory
-            this->post_out_featuremaps_[stream_idx][i]->get_data(out_data[i]);
-        }
-    }
-    else {
-        for (int i = 0; i < static_cast<int>(out_ports_.size()); ++i) {
-            // copy data into user's memory
-            this->out_featuremaps_[stream_idx][i]->get_data(out_data[i]);
-        }
-    }
-    out_featuremaps_[stream_idx][0]->set_out_ready(true);
-    manual_recv_cv[stream_idx]->notify_one();
-    return true;
-}
+    spdlog::debug("[Model {}][manual_send]: push item into ifmap_queue for stream {}", model_id_, stream_id);
 
-bool MxModel::manual_run(std::vector<float*> in_data, std::vector<float*> &out_data, int pstream_id, int32_t timeout)
-{
-    if(!this->model_manual_send(in_data, pstream_id, timeout)) {
+    if (ifmap_queue_->push_timeout(item, timeout) == false) {
+        // return the item to freelist if push to queue failed
+        ifmap_freelist_->push(item);
         return false;
     }
-    if(!this->model_manual_receive(out_data, pstream_id, timeout)) {
+
+    spdlog::debug("[Model {}][manual_send]: finished one data send for stream {}", model_id_, stream_id);
+
+    return true;
+}
+bool MxModel::model_manual_receive(std::vector<float*> &user_ofmaps, int stream_id, int32_t timeout)
+{
+    // start manual model if not started yet
+    _model_manual_start();
+
+    // init result buffer for this stream
+    manual_result_buffer_.init(stream_id);
+
+    IomapItem* item = nullptr;
+
+    if (timeout > 0) {
+        // wait till input is sent to this stream or timeout
+        if (manual_result_buffer_[stream_id]->pop_timeout(item, timeout) == false) {
+            return false;
+        }
+    }
+    else {
+        // wait indefinitely till input is sent to this stream
+        spdlog::debug("[Model {}-{}][recv]: manual_result_buffer_ size: {}", model_id_, stream_id, manual_result_buffer_[stream_id]->size());
+        manual_result_buffer_[stream_id]->pop(item);
+    }
+
+    spdlog::debug("[Model {}][manual_receive]: get item from result buffer for stream {}", model_id_, stream_id);
+
+    if (!post_model_path_.empty()) {
+        // infer with post model
+        _post_inference(item);
+
+        // copy data from internal `post` feature map to user
+        for (int i = 0; i < (int)item->ofmaps.size(); i++) {
+            item->post_ofmaps[i]->get_data(user_ofmaps[i]);
+        }
+    }
+    else {
+        // copy data from internal feature map to user
+        for (int i = 0; i < (int)item->ofmaps.size(); i++) {
+            item->ofmaps[i]->get_data(user_ofmaps[i]);
+        }
+    }
+
+
+    // return the item to freelist
+    ofmap_freelist_->push(item);
+
+    spdlog::debug("[Model {}][manual_receive]: finished one data receive for stream {}", model_id_, stream_id);
+
+    return true;
+}
+bool MxModel::manual_run(std::vector<float*> user_ifmaps, std::vector<float*> &user_ofmaps, int stream_id, int32_t timeout)
+{
+    if (!this->model_manual_send(user_ifmaps, stream_id, timeout)) {
+        return false;
+    }
+    if (!this->model_manual_receive(user_ofmaps, stream_id, timeout)) {
         return false;
     }
     return true;

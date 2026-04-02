@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -134,6 +134,8 @@ struct PortInfo {
         std::vector< std::vector<int>> folded_opshape;
     } shape_shift_info;
 
+    std::vector<unsigned int> permuted_indices;  // indices that can be use to directly apply folded_ops
+    std::vector<unsigned int> compute_index_mapping(std::vector<uint32_t> shape, const PortInfo::shape_shift_info_t &shape_shift_info, bool inport);
 };
 
 /**

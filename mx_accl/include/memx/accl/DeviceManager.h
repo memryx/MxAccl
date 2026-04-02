@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MemryX
+// Copyright (c) 2025-2026 MemryX
 // SPDX-License-Identifier: MPL-2.0
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -58,12 +58,12 @@ class DeviceManager
 
     int all_devices_count;
 
-    LockedVar<bool> discover_done;
-
     bool discover_devices_direct();
     bool discover_devices_remote(Client* client);
-
+    
     std::vector<bool> local_device_in_use;
+    
+    std::vector<int> convert_device_ids(const std::vector<int>& device_ids);
 
   private:
 
